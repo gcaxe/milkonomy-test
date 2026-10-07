@@ -113,9 +113,8 @@ Vue 3 + TypeScript ｜ Vite ｜ Element Plus ｜ Pinia ｜ Vue Router ｜ UnoCSS
 
 ## 致谢
 
-本项目基于 hyhfish/milkonomy 二次开发，原项目模板来自 luyh7。感谢原作者的开源贡献。
+本项目基于 polokikiki/milkonomy 二次开发，原项目模板来自 luyh7。感谢原作者的开源贡献。
 
-新增 / 优化功能：打野工具全系列（强化、继承、挑品、超级）、精确等级动态筛选、目标等级联动约束、首页逐级制作 / 目标材质筛选。
 
 ## 许可
 
