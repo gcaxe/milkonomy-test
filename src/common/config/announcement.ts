@@ -43,7 +43,7 @@ export const announcementConfig: AnnouncementConfig = {
     ].join("\n")
   },
   link: {
-    url: "https://www.milkonomy.top/#/changelog",
+    url: "https://gcaxe.github.io/milkonomy-test/#/changelog",
     text: "查看详情"
   }
 }

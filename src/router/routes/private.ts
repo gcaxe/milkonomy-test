@@ -237,7 +237,7 @@ export const privateRoutes: RouteRecordRaw[] = [
     },
     children: [
       {
-        path: "https://github.com/luyh7/milkonomy",
+        path: "https://github.com/gcaxe/milkonomy-test",
         component: () => {},
         name: "Link0",
         meta: {
