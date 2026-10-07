@@ -1,0 +1,1 @@
+import{_ as e}from"./_plugin-vue_export-helper-DlAUqK2U.js";import{g as s,C as a,f as t}from"./index-BIKPc0HY.js";const c={},n={class:"polokiki-badge"};function r(i,o){return t(),s("span",n,o[0]||(o[0]=[a("span",{class:"polokiki-name"},"gcaxe",-1)]))}const d=e(c,[["render",r],["__scopeId","data-v-9231d614"]]);export{d as P};
