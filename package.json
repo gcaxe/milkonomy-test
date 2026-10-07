@@ -70,6 +70,13 @@
     "vitest": "2.1.8",
     "vue-tsc": "2.2.0"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "unrs-resolver",
+      "vue-demi"
+    ]
+  },
   "lint-staged": {
     "*": "eslint --fix"
   }
