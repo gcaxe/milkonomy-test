@@ -182,3 +182,39 @@ it("端到端配平：三造得到+0 → 强化+10 → 出售（含自定义价�
   console.log(`[无挂单] noListing=${r4.noListing}（精炼混沌连枷+0 快照无卖单）`)
   expect(r4.noListing).toBe(true)
 }, 600000)
+
+it("精炼披风等不可交易产物的三造配方可用（task05-1）", async () => {
+  const { findProducingActionOf } = await boot()
+  const { getProcessItemOptions } = await import("@/pages/multistep/utils/items")
+  const { ManufactureCalculator } = await import("@/calculator/manufacture")
+  // 数据中 isTradable=false 的精炼装备（披风 + 战斗装备）：A 类下拉必须提供
+  const nonTradable = [
+    "/items/artificer_cape_refined",
+    "/items/chance_cape_refined",
+    "/items/culinary_cape_refined",
+    "/items/gatherer_cape_refined",
+    "/items/sinister_cape_refined",
+    "/items/enchanted_cloak_refined",
+    "/items/chimerical_quiver_refined"
+  ]
+  const opts = getProcessItemOptions("A").map(o => o.hrid)
+  for (const hrid of nonTradable) {
+    expect(opts).toContain(hrid)
+    const action = findProducingActionOf(hrid)
+    expect(action).toBeTruthy()
+    const calc = new ManufactureCalculator({ hrid, project: "处理方式", action: action!.split("/")[2] as any })
+    expect(calc.available).toBe(true)
+    console.log(`[精炼] ${hrid} -> ${action}（available=${calc.available}）`)
+  }
+}, 600000)
+
+it("默认配方机制：当前数据无重盾链时不误建、不报错（task05-3）", async () => {
+  await boot()
+  localStorage.clear()
+  const { useMultistepGraph } = await import("@/pages/multistep/composables/useMultistepGraph")
+  const graph = useMultistepGraph()
+  // 数据中暂无 Holy Heavy Shield / Cheese Heavy Shield → 不创建、不写标记
+  expect(graph.nodes.value.length).toBe(0)
+  expect(localStorage.getItem("multistep-default-plan-created")).toBeNull()
+  console.log("[默认配方] 无重盾链数据时画布为空且未写创建标记（数据更新后首次进入会自动创建「配方一」）")
+}, 600000)

@@ -1,6 +1,7 @@
 import type { GraphNode, GraphPin, GraphWire, MultistepPlan, UpupItemRow } from "../types"
 import { ElMessage } from "element-plus"
 import { computed, ref, toRaw, watch } from "vue"
+import { getActionDetailOf, getGameDataApi, getItemDetailOf } from "@/common/apis/game"
 import locales, { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
 import { deleteRecipe, loadRecipes, saveRecipe } from "../utils/planStore"
@@ -503,13 +504,16 @@ export function useMultistepGraph() {
       const pinId = `${func.id}:out:${i === 0 ? "main" : i}`
       // pin 已被用户合并出的蓝节点连线占用，跳过
       if (wires.value.some(w => w.fromPinId === pinId)) return
+      // 不可交易产物（如精炼披风）无法挂单出售，默认保留于背包
+      const outItem = getItemDetailOf(out.hrid)
+      const keepDefault = out.hrid === COIN_HRID || !outItem?.isTradable
       const green: GraphNode = {
         id: nextId("green"),
         kind: "var",
         varKind: "green",
         hrid: out.hrid,
         level: out.level,
-        sellMode: out.hrid === COIN_HRID ? "keep" : "sell",
+        sellMode: keepDefault ? "keep" : "sell",
         x: func.x,
         y: func.y + 200,
         createdBy: func.id
@@ -821,6 +825,76 @@ export function useMultistepGraph() {
 
   // 配平计算（快照驱动六卡片与节点指标）
   const { summary, nodeResults, steps, balance } = useMultistepCalc(nodes, wires, rows)
+
+  // ===================== 默认配方「配方一」 =====================
+  const DEFAULT_PLAN_CREATED_KEY = "multistep-default-plan-created"
+
+  /** 从「神圣重盾」沿三造升级链向下找到「奶酪重盾」，返回自基础层向上的各层产物（数据中暂无则返回空） */
+  function buildDefaultShieldChain(): { product: string, action: string }[] {
+    const gameData = getGameDataApi()
+    if (!gameData) return []
+    const byName = (name: string) => Object.values(gameData.itemDetailMap).find(i => i.name === name)?.hrid
+    const top = byName("Holy Heavy Shield")
+    const base = byName("Cheese Heavy Shield")
+    if (!top || !base) return []
+    const down: { product: string, action: string }[] = []
+    let current: string | undefined = top
+    while (current && down.length < 12) {
+      const action = findProducingActionOf(current)
+      if (!action) return []
+      down.push({ product: current, action })
+      current = getActionDetailOf(action).upgradeItemHrid
+    }
+    // 最底层必须是奶酪重盾，否则视为数据不完整
+    if (down[down.length - 1]?.product !== base) return []
+    return down.reverse()
+  }
+
+  /** 每个玩家首次进入时创建一个默认的已保存配方「配方一」（每一层重盾都用三造生产） */
+  function ensureDefaultPlan() {
+    if (typeof localStorage === "undefined") return
+    if (localStorage.getItem(DEFAULT_PLAN_CREATED_KEY)) return
+    if (loadRecipes().some(p => p.name === "配方一")) {
+      localStorage.setItem(DEFAULT_PLAN_CREATED_KEY, "1")
+      return
+    }
+    const chain = buildDefaultShieldChain()
+    if (chain.length < 2) return // 数据中暂无重盾链（游戏数据未更新），不建；下次进入重试
+    try {
+      // 自基础层（奶酪重盾）向上逐层创建三造节点
+      const funcs: GraphNode[] = []
+      for (const tier of chain) {
+        const func = addFuncNode()
+        func.funcClass = "A"
+        func.mainItemHrid = tier.product
+        func.actionHrid = tier.action
+        applyResolvedRecipe(func)
+        funcs.push(func)
+      }
+      // 相邻层：下层产物绿节点与上层升级原料红节点合并为蓝，连通整链
+      for (let i = 0; i + 1 < funcs.length; i++) {
+        const product = funcs[i].mainItemHrid!
+        const green = nodes.value.find(n => n.kind === "var" && n.createdBy === funcs[i].id && n.hrid === product && (n.level ?? 0) === 0)
+        const red = nodes.value.find(n => n.kind === "var" && n.createdBy === funcs[i + 1].id && n.hrid === product && (n.level ?? 0) === 0)
+        if (green && red) mergeVarNodes(green, red)
+      }
+      // 驱动行（第一行）= 基础层第一个原料，数量按配方所需补足（1 批 = 1 个奶酪重盾）
+      const baseAction = getActionDetailOf(chain[0].action)
+      if (rows.value[0]?.hrid && baseAction.inputItems?.length) {
+        const first = baseAction.inputItems.find(i => i.itemHrid === rows.value[0].hrid)
+        if (first) rows.value[0].count = first.count
+      }
+      planName.value = "配方一"
+      savePlan()
+      resetLayout() // 画布按网格排开（保存的配方不含坐标）
+      localStorage.setItem(DEFAULT_PLAN_CREATED_KEY, "1")
+    } catch (e) {
+      console.error("创建默认配方失败", e)
+      clearAll() // 失败时清空画布，不写标记，下次进入重试
+    }
+  }
+
+  ensureDefaultPlan()
 
   if (nodes.value.length) layout()
 

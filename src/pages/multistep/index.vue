@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import { Close, Delete, FullScreen, Plus, ZoomIn, ZoomOut } from "@element-plus/icons-vue"
 import { ElMessageBox } from "element-plus"
-import { ref } from "vue"
+import { onMounted, ref } from "vue"
 import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import ActionConfig from "@/pages/dashboard/components/ActionConfig.vue"
 import GameInfo from "@/pages/dashboard/components/GameInfo.vue"
@@ -33,6 +33,16 @@ function onClearAll() {
     // 取消清空
   })
 }
+
+// 不蒜子统计：加载脚本后自动填充页面底部的「总访问量 / 访客数」
+onMounted(() => {
+  if (document.getElementById("busuanzi-script")) return
+  const s = document.createElement("script")
+  s.id = "busuanzi-script"
+  s.async = true
+  s.src = "https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"
+  document.body.appendChild(s)
+})
 </script>
 
 <template>
@@ -147,6 +157,16 @@ function onClearAll() {
         {{ t('强化的例子：三造二厨得到精炼混沌连枷+0，强化节点强化到+10、从+7开始用混沌锁链保护，绿色叶子出售+10产物') }}
       </div>
     </el-card>
+
+    <!-- 不蒜子统计：总访问量 / 访客数（脚本加载后自动填充数值） -->
+    <div class="busuanzi-footer">
+      <span id="busuanzi_container_site_pv" class="bsz-item">
+        {{ t('总访问量') }}<span id="busuanzi_value_site_pv" />
+      </span>
+      <span id="busuanzi_container_site_uv" class="bsz-item">
+        {{ t('访客数') }}<span id="busuanzi_value_site_uv" />
+      </span>
+    </div>
   </div>
 </template>
 
@@ -248,6 +268,18 @@ function onClearAll() {
   background: rgba(249, 115, 22, 0.25);
   border-color: #f97316;
   color: #f97316;
+}
+.busuanzi-footer {
+  margin-top: 16px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+}
+.busuanzi-footer .bsz-item {
+  white-space: nowrap;
 }
 .guide-line + .guide-line {
   margin-top: 1em;

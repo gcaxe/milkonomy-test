@@ -18,7 +18,7 @@ export function getTradableItemOptions(): ItemOption[] {
     .sort((a, b) => a.label.localeCompare(b.label, "zh"))
 }
 
-/** 处理方式节点第二个下拉的可选物品：A=有唯一产配方的产物；B=可炼金的原料。按 gameData 缓存 */
+/** 处理方式节点第二个下拉的可选物品：A=有唯一产配方的产物（含不可交易产物，如精炼披风）；B=可炼金的原料。按 gameData 缓存 */
 let _processOptionsCache: { data: unknown, A: ItemOption[], B: ItemOption[] } | null = null
 export function getProcessItemOptions(cls: "A" | "B"): ItemOption[] {
   const gameData = getGameDataApi()
@@ -27,7 +27,13 @@ export function getProcessItemOptions(cls: "A" | "B"): ItemOption[] {
     const A: ItemOption[] = []
     const B: ItemOption[] = []
     for (const item of Object.values(gameData.itemDetailMap)) {
-      if (!item.isTradable) continue
+      if (!item.isTradable) {
+        // 三造产物允许不可交易物品（如精炼披风：游戏中不可挂单但可三造），配方照常解析
+        if (findProducingActionOf(item.hrid)) {
+          A.push({ hrid: item.hrid, label: getTrans(item.name) })
+        }
+        continue
+      }
       const opt = { hrid: item.hrid, label: getTrans(item.name) }
       if (findProducingActionOf(item.hrid)) A.push(opt)
       if (getAlchemyActionOptionsOf(item.hrid).length) B.push(opt)
