@@ -10,6 +10,52 @@ const { locale, t } = useI18n()
     <h2 class="changelog-header">
       {{ t("更新日志") }}<PolokikiBadge />
     </h2>
+    <!-- ================== v2.8.4 ================== -->
+    <details open>
+      <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
+        v2.8.4 — 2026-10-08
+      </summary>
+      <div style="padding-left:16px">
+        <template v-if="locale !== 'en'">
+          <p><strong>一、配方分享</strong></p>
+          <ol>
+            <li>点「生成配方码」，把当前配方编码成一串配方码：只含 0-9、a-z、A-Z，以 # 结尾，复制即可分享给他人。</li>
+            <li>收到配方码后粘贴到输入框，点「根据配方码加载配方」即可完整还原对方的整张配方图（节点、连线、数量与设置全部恢复）。</li>
+            <li>配方码 # 之后的内容是注释——加载时自动忽略，可以随手备注「给新手的冲炼金方案」之类的说明；站内不会自动生成注释。</li>
+            <li>配方码不依赖浏览器本地保存，换设备、换浏览器都能使用，清缓存也不丢失。</li>
+          </ol>
+          <p><strong>二、多步利润蓝图新功能</strong></p>
+          <ol>
+            <li>三造继承强化等级：给三造二厨节点喂强化过的装备，产物按 0.7 倍继承强化等级，小数按概率拆分显示（如 +4 奶酪剑锻造显示为 0.8 个 +3 与 0.2 个 +2 翠绿剑）。</li>
+            <li>强化分解：炼金-分解强化等级非 0 的物品时，成功除原有产物外额外产出强化精华，数量与「强化工具-强化分解」页一致（如 +14 棉花手套成功产出 19,825 个）。</li>
+            <li>红节点新增「NPC购买」：部分新手装备与 17 种实习护符可按 NPC 固定价购买。</li>
+            <li>多步页底部新增网站访问统计：总访问量与访客数。</li>
+          </ol>
+          <p><strong>三、修复</strong></p>
+          <p>修复了若干配方数量口径与翻译问题。</p>
+        </template>
+        <template v-else>
+          <p><strong>1. Recipe sharing</strong></p>
+          <ol>
+            <li>Click "Generate Code" to encode the current recipe into a code string containing only 0-9a-zA-Z, ending with # — copy it to share.</li>
+            <li>Paste a received code into the input box and click "Load from Code" to fully restore the sender's graph (nodes, wires, quantities and settings).</li>
+            <li>Anything after # is a comment and is ignored when loading — handy for notes like "for beginners"; the site never generates comments automatically.</li>
+            <li>Codes don't rely on local storage, so they survive across devices, browsers and cache clears.</li>
+          </ol>
+          <p><strong>2. Multi-step blueprint updates</strong></p>
+          <ol>
+            <li>Enhance-level inheritance in crafting: feeding an enhanced item into a craft node inherits 0.7× its level, with fractional levels split probabilistically (e.g. a +4 sword shows as 0.8× +3 and 0.2× +2).</li>
+            <li>Enhanced decompose: decomposing items with an enhance level now yields enhancing essence on success, matching the Enhance-Decompose page (e.g. +14 cotton gloves give 19,825).</li>
+            <li>Red nodes gain an "NPC buy" option at fixed prices for starter gear and the 17 trainee charms.</li>
+            <li>Site visit counters (total views / visitors) at the bottom of the page.</li>
+          </ol>
+          <p><strong>3. Fixes</strong></p>
+          <p>Fixed several recipe quantity-caliber and translation issues.</p>
+        </template>
+      </div>
+    </details>
+
+    <hr>
     <!-- ================== v2.8.3 ================== -->
     <details open>
       <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
@@ -19,7 +65,7 @@ const { locale, t } = useI18n()
         <template v-if="locale !== 'en'">
           <p><strong>一、新功能</strong></p>
           <ol>
-            <li>多步利润蓝图页：红/绿/蓝变量节点 + 紫/橙函数节点的可拖动结点图。以第一行物品数量为基准，点「自动配平」按配方期望值传播整张图，得到单批成本/税后收入/利润与小时收益，并附处理步骤与工时占比明细。</li>
+            <li>多步利润蓝图页：红/绿/蓝变量节点 + 紫/橙函数节点的可拖动结点图。以第一行物品数量为基准，点「自动配平」按配方期望值计算整张图，得到单批成本/税后收入/利润与小时收益，并附处理步骤与工时占比明细。</li>
             <li>处理方式（紫）节点改版：展开态有 4 个下拉菜单——先选「三造二厨/炼金」，再用新插入的物品下拉确定配方（三造二厨选产物、炼金选原料+动作+催化剂），不再需要通过连线确定配方；配方确定后自动生成对应的输入输出节点。节点可折叠成紫色小长方形，折叠不影响 pin 与连线。</li>
             <li>新增强化（橙）节点：选择 +0 装备、强化到+几（+2~+20）、保护物品、从+几开始保护（+x 即不保护），配方即确定；材料与保护费用按强化计算页「材料费用」同口径（工时费 0）计算。</li>
             <li>红节点新增「来自背包」获取方式（按所选价格 ×(1-税率) 计价）；绿节点可选择「保留于背包」（不计税，金币只能保留于背包）。</li>

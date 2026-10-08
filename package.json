@@ -1,7 +1,7 @@
 {
   "name": "milkonomy",
   "type": "module",
-  "version": "2.8.3",
+  "version": "2.8.4",
   "description": "A crafted admin template, built with Vue3, Vite, TypeScript, Element Plus, and more",
   "author": "gcaxe",
   "repository": "https://github.com/gcaxe/milkonomy-test",
