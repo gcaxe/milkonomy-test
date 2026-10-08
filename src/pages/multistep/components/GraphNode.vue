@@ -7,6 +7,7 @@ import { computed } from "vue"
 import { getItemDetailOf } from "@/common/apis/game"
 import { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
+import { getNpcPriceOf } from "../utils/recipes"
 
 const props = defineProps<{
   node: GraphNode
@@ -109,6 +110,7 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
     >
       <el-option :label="t('购买')" value="buy" />
       <el-option v-if="gatherActions.length" :label="t('三采集')" value="gather" />
+      <el-option v-if="node.hrid && getNpcPriceOf(node.hrid) != null" :label="t('NPC购买')" value="npc" />
       <el-option :label="t('来自背包')" value="backpack" />
     </el-select>
 

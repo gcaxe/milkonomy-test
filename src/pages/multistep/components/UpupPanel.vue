@@ -4,14 +4,65 @@ import type { MultistepPlan, UpupItemRow } from "../types"
 import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { Delete, Plus, PriceTag, Sort } from "@element-plus/icons-vue"
-import { ElMessageBox } from "element-plus"
-import { computed, ref } from "vue"
+import { ElMessage, ElMessageBox } from "element-plus"
+import { computed, ref, toRaw } from "vue"
 import { COIN_HRID } from "@/pinia/stores/game"
 import { getTradableItemOptions } from "../utils/items"
+import { decodePlanCode, encodePlanCode } from "../utils/planCode"
 import CustomPriceDialog from "./CustomPriceDialog.vue"
 
 const props = defineProps<{ graph: ReturnType<typeof useMultistepGraph> }>()
 const { t } = useI18n()
+
+// ===================== 配方码（如炉石卡组码） =====================
+const codeText = ref("")
+const codeBusy = ref(false)
+
+/** 把当前画布内容打包成配方码（与「保存配方」同一口径：不含坐标） */
+function buildCurrentPlan(): MultistepPlan {
+  return {
+    name: props.graph.planName.value,
+    rows: toRaw(props.graph.rows.value),
+    nodes: toRaw(props.graph.nodes.value).map(({ x, y, ...rest }) => ({ ...rest, x: 0, y: 0 })),
+    wires: toRaw(props.graph.wires.value),
+    savedAt: Date.now()
+  }
+}
+
+/** 生成配方码：填入输入框（# 之后可自行加注释） */
+async function onGenCode() {
+  if (codeBusy.value) return
+  try {
+    codeBusy.value = true
+    const code = await encodePlanCode(buildCurrentPlan())
+    codeText.value = code
+    ElMessage.success(t("已生成配方码"))
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t("生成配方码失败"))
+  } finally {
+    codeBusy.value = false
+  }
+}
+
+/** 根据配方码加载配方：# 之后的内容是注释，自动忽略 */
+async function onLoadCode() {
+  if (codeBusy.value) return
+  if (!codeText.value.trim()) {
+    ElMessage.warning(t("请先粘贴配方码"))
+    return
+  }
+  try {
+    codeBusy.value = true
+    const plan = await decodePlanCode(codeText.value)
+    props.graph.loadRecipe(plan)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(t("配方码无效，请检查后重试"))
+  } finally {
+    codeBusy.value = false
+  }
+}
 
 // 下拉可选物品：与红节点内选择共用同一来源
 const itemOptions = computed(() => getTradableItemOptions())
@@ -114,6 +165,21 @@ function removePlan(name: string) {
           </el-button>
           <el-button type="primary" @click="graph.savePlan()">
             {{ t('保存配方') }}
+          </el-button>
+        </div>
+        <!-- 配方码：输入/生成配方码 + 根据配方码加载配方（# 之后是注释） -->
+        <div class="upup-code-row">
+          <el-input
+            v-model="codeText"
+            :placeholder="t('配方码（# 之后是注释）')"
+            clearable
+            style="flex: 1; min-width: 280px"
+          />
+          <el-button :loading="codeBusy" @click="onLoadCode">
+            {{ t('根据配方码加载配方') }}
+          </el-button>
+          <el-button type="primary" plain :loading="codeBusy" @click="onGenCode">
+            {{ t('生成配方码') }}
           </el-button>
         </div>
       </div>
@@ -307,6 +373,13 @@ function removePlan(name: string) {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   max-width: 640px;
+}
+.upup-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 .upup-plan {
   display: flex;

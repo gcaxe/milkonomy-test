@@ -3,7 +3,7 @@ export type VarKind = "red" | "blue" | "green"
 /** 函数节点类别：A=三造二厨(产物定配方) B=炼金(原料定配方) C=强化 */
 export type FuncClass = "A" | "B" | "C"
 /** 红节点获取方式 */
-export type ObtainMethod = "buy" | "gather" | "backpack"
+export type ObtainMethod = "buy" | "gather" | "backpack" | "npc"
 /** 绿节点处理方式：出售 / 保留于背包 */
 export type SellMode = "sell" | "keep"
 

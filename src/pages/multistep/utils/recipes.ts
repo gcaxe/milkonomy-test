@@ -1,6 +1,8 @@
 import type { GraphNode } from "../types"
 import type { Action } from "~/game"
+import { CoinifyCalculator, DecomposeCalculator, TransmuteCalculator } from "@/calculator/alchemy"
 import { EnhanceCalculator } from "@/calculator/enhance"
+import { ManufactureCalculator } from "@/calculator/manufacture"
 import { getActionDetailOf, getAlchemyEssenceDropTable, getAlchemyRareDropTable, getCoinifyTimeCost, getDecomposeTimeCost, getGameDataApi, getTransmuteTimeCost } from "@/common/apis/game"
 import { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
@@ -138,7 +140,7 @@ export function resolveRecipeB(mainItemHrid: string, actionKey: AlchemyActionKey
 
 // ===================== 函数节点输出 pin（按配方顺序） =====================
 
-/** 输出 pin 描述：mundane=平凡产物（稀有/精华掉落，不受炼金成功率影响，可被隐藏） */
+/** 输出 pin 描述：mundane=平凡产物（稀有/精华掉落，可被隐藏） */
 export interface FuncOutputPin {
   hrid: string
   level: number
@@ -146,42 +148,106 @@ export interface FuncOutputPin {
 }
 
 /**
- * 函数节点的输出 pin 列表（按配方顺序，与首页计算器 productList 同序）。
- * B 类炼金的稀有/精华掉落是平凡产物：无论成功失败都会按掉落率产出，
- * 计算时不应再乘成功率（计算器条目里 count 已 ÷successRate，正好抵消）。
+ * 构造某函数节点对应的首页计算器实例（数量/耗时口径与首页一致）。
+ * mainLevel = 主输入 pin 上连线物品的强化等级：
+ *  - A 类：originLevel（继承 0.7 倍强化等级，精炼装备保留原等级）
+ *  - B 类分解：enhanceLevel（成功额外产出强化精华）
  */
-export function getFuncOutputPins(node: GraphNode): FuncOutputPin[] {
+export function buildMultistepCalculator(n: GraphNode, mainLevel: number = 0) {
+  if (n.funcClass === "C") return null
+  const cfg = { hrid: n.mainItemHrid!, project: getTrans("处理方式"), catalystRank: n.catalystRank ?? 0 }
+  if (n.funcClass === "A") {
+    const action = n.actionHrid!.split("/")[2] as Action
+    return new ManufactureCalculator({ ...cfg, action, originLevel: mainLevel })
+  }
+  const key = n.actionHrid!.split("/").pop()
+  if (key === "coinify") return new CoinifyCalculator(cfg)
+  if (key === "transmute") return new TransmuteCalculator(cfg)
+  return new DecomposeCalculator({ ...cfg, enhanceLevel: mainLevel })
+}
+
+/**
+ * 函数节点的输出 pin 列表（按配方顺序，与首页计算器 productList 同序，含强化等级）。
+ * 直接由计算器 productList 派生：A 类继承拆分（0.8×+3 / 0.2×+2）、分解的强化精华都会
+ * 以独立 pin 出现；平凡产物 = 主要产物之后的掉落条目。
+ */
+export function getFuncOutputPins(node: GraphNode, mainLevel: number = 0): FuncOutputPin[] {
   if (node.funcClass === "C") {
     if (!node.mainItemHrid || node.enhanceLevel == null) return []
     return [{ hrid: node.mainItemHrid, level: node.enhanceLevel, mundane: false }]
   }
+  const calc = buildMultistepCalculator(node, mainLevel)
+  if (!calc) return []
+  // 非平凡（主要产物）条目数：
+  // A：目标等级为整数时=outputItems 数量；小数拆分时=2（floor/ceil 两条）
+  // B：分解=（强化精华?1:0）+decomposeItems；转化=transmuteDropTable；点金=1
+  let mainCount: number
   if (node.funcClass === "A") {
-    if (!node.actionHrid) return []
-    const detail = getActionDetailOf(node.actionHrid)
-    return [
-      ...(detail.outputItems || []).map(o => ({ hrid: o.itemHrid, level: 0, mundane: false })),
-      ...(detail.essenceDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true })),
-      ...(detail.rareDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true }))
-    ]
+    const detail = getActionDetailOf(node.actionHrid!)
+    const target = (calc as ManufactureCalculator).targetLevel
+    mainCount = target % 1 === 0 ? (detail.outputItems?.length ?? 1) : 2
+  } else if (node.actionHrid!.split("/").pop() === "decompose") {
+    const item = getGameDataApi().itemDetailMap[node.mainItemHrid!]
+    mainCount = (mainLevel > 0 ? 1 : 0) + (item.alchemyDetail.decomposeItems?.length ?? 0)
+  } else if (node.actionHrid!.split("/").pop() === "transmute") {
+    const item = getGameDataApi().itemDetailMap[node.mainItemHrid!]
+    mainCount = item.alchemyDetail.transmuteDropTable?.length ?? 0
+  } else {
+    mainCount = 1
   }
-  // B 类：主要产物（转化/分解/点金）+ 稀有掉落 + 炼金精华掉落
-  if (!node.mainItemHrid || !node.actionHrid) return []
-  const item = getGameDataApi().itemDetailMap[node.mainItemHrid]
-  if (!item) return []
-  const actionKey = node.actionHrid.split("/").pop() as AlchemyActionKey
-  const timeCost = actionKey === "transmute"
-    ? getTransmuteTimeCost()
-    : actionKey === "decompose" ? getDecomposeTimeCost() : getCoinifyTimeCost()
-  const mains: FuncOutputPin[] = actionKey === "transmute"
-    ? (item.alchemyDetail.transmuteDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: false }))
-    : actionKey === "decompose"
-      ? (item.alchemyDetail.decomposeItems || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: false }))
-      : [{ hrid: COIN_HRID, level: 0, mundane: false }]
-  return [
-    ...mains,
-    ...getAlchemyRareDropTable(item, timeCost).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true })),
-    ...getAlchemyEssenceDropTable(item, timeCost).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true }))
-  ]
+  return calc.productList.map((p, i) => ({
+    hrid: p.hrid,
+    level: p.level ?? 0,
+    mundane: i >= mainCount
+  }))
+}
+
+// ===================== NPC 购买 =====================
+
+/** NPC 固定价格购买：5000 价的奶酪武器/木制武器/十件奶酪工具；250000 价的 17 种实习护符 */
+export const NPC_PRICE_MAP: Record<string, number> = {
+  // 武器（5000）
+  "/items/cheese_sword": 5000,
+  "/items/cheese_hammer": 5000,
+  "/items/cheese_spear": 5000,
+  "/items/wooden_bow": 5000,
+  "/items/wooden_crossbow": 5000,
+  "/items/wooden_water_staff": 5000,
+  "/items/wooden_nature_staff": 5000,
+  "/items/wooden_fire_staff": 5000,
+  // 奶酪刷子到奶酪强化器共 10 件工具（5000）
+  "/items/cheese_brush": 5000,
+  "/items/cheese_shears": 5000,
+  "/items/cheese_hatchet": 5000,
+  "/items/cheese_chisel": 5000,
+  "/items/cheese_needle": 5000,
+  "/items/cheese_pot": 5000,
+  "/items/cheese_spatula": 5000,
+  "/items/cheese_alembic": 5000,
+  "/items/cheese_enhancer": 5000,
+  // 实习护符 17 种（250000）
+  "/items/trainee_alchemy_charm": 250000,
+  "/items/trainee_attack_charm": 250000,
+  "/items/trainee_brewing_charm": 250000,
+  "/items/trainee_cheesesmithing_charm": 250000,
+  "/items/trainee_cooking_charm": 250000,
+  "/items/trainee_crafting_charm": 250000,
+  "/items/trainee_defense_charm": 250000,
+  "/items/trainee_enhancing_charm": 250000,
+  "/items/trainee_foraging_charm": 250000,
+  "/items/trainee_intelligence_charm": 250000,
+  "/items/trainee_magic_charm": 250000,
+  "/items/trainee_melee_charm": 250000,
+  "/items/trainee_milking_charm": 250000,
+  "/items/trainee_ranged_charm": 250000,
+  "/items/trainee_stamina_charm": 250000,
+  "/items/trainee_tailoring_charm": 250000,
+  "/items/trainee_woodcutting_charm": 250000
+}
+
+/** 该物品的 NPC 固定价格；不在列表返回 null（无 NPC 购买选项） */
+export function getNpcPriceOf(hrid: string): number | null {
+  return NPC_PRICE_MAP[hrid] ?? null
 }
 
 // ===================== C 类：强化节点 =====================

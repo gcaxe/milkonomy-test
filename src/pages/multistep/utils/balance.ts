@@ -1,13 +1,12 @@
 import type { GraphNode, GraphWire, NodeCalcResult, UpupItemRow } from "../types"
 import type { Action } from "~/game"
-import { CoinifyCalculator, DecomposeCalculator, TransmuteCalculator } from "@/calculator/alchemy"
 import { GatherCalculator } from "@/calculator/gather"
-import { ManufactureCalculator } from "@/calculator/manufacture"
+import { getActionDetailOf } from "@/common/apis/game"
 import { getUsedPriceOf } from "@/common/apis/price"
 import { SELL_TAX_FACTOR } from "@/common/constants/market"
 import { getTrans } from "@/locales"
 import { COIN_HRID, PriceStatus, useGameStore } from "@/pinia/stores/game"
-import { type AlchemyActionKey, getFuncOutputPins, getGatherActionsOf, resolveEnhanceRecipe, resolveRecipeA, resolveRecipeB } from "./recipes"
+import { type AlchemyActionKey, buildMultistepCalculator, getFuncOutputPins, getGatherActionsOf, getNpcPriceOf, resolveEnhanceRecipe, resolveRecipeA, resolveRecipeB } from "./recipes"
 
 /** 单批配平结果 */
 export interface BalanceResult {
@@ -64,20 +63,6 @@ function emptyNodeCalc(): NodeCalcResult {
   return { actions: null, timeCost: null, extraCost: null, preTaxIncome: null, tax: null, afterTaxIncome: null }
 }
 
-/** 构造某函数节点对应的首页计算器实例（数量/耗时口径与首页一致）；强化节点返回 null（专用配方） */
-function buildFuncCalculator(n: GraphNode) {
-  if (n.funcClass === "C") return null
-  const cfg = { hrid: n.mainItemHrid!, project: getTrans("处理方式"), catalystRank: n.catalystRank ?? 0 }
-  if (n.funcClass === "A") {
-    const action = n.actionHrid!.split("/")[2] as Action
-    return new ManufactureCalculator({ ...cfg, action })
-  }
-  const key = n.actionHrid!.split("/").pop()
-  if (key === "coinify") return new CoinifyCalculator(cfg)
-  if (key === "transmute") return new TransmuteCalculator(cfg)
-  return new DecomposeCalculator(cfg)
-}
-
 function isFuncResolved(n: GraphNode): boolean {
   if (n.kind !== "func") return false
   if (n.funcClass === "C") {
@@ -89,7 +74,7 @@ function isFuncResolved(n: GraphNode): boolean {
 /** 一次配方解析：把紫节点计算器/强化配方统一为「每批输入/输出/耗时/成功率」描述 */
 interface NodeRecipe {
   /** 首页计算器（强化节点为 null） */
-  calc: ReturnType<typeof buildFuncCalculator>
+  calc: ReturnType<typeof buildMultistepCalculator>
   /** 输入条目（与计算器 ingredientList 同源；强化节点为自身输入列表） */
   inputs: { hrid: string, count: number, level: number, auto: boolean }[]
   /** 输入 pin i → inputs 索引（无对应条目为 -1）；同名输入按顺序逐一匹配 */
@@ -119,7 +104,7 @@ function matchPinsInOrder(pins: { hrid: string, level?: number }[], entries: { h
   })
 }
 
-function buildNodeRecipe(n: GraphNode): NodeRecipe | null {
+function buildNodeRecipe(n: GraphNode, mainLevel: number = 0): NodeRecipe | null {
   if (!isFuncResolved(n)) return null
   if (n.funcClass === "C") {
     const r = resolveEnhanceRecipe(n)
@@ -135,11 +120,17 @@ function buildNodeRecipe(n: GraphNode): NodeRecipe | null {
       successRate: 1
     }
   }
-  const calc = buildFuncCalculator(n)!
-  const inputPins = n.funcClass === "A"
+  const calc = buildMultistepCalculator(n, mainLevel)!
+  const inputPins: { hrid: string, auto: boolean, level?: number }[] = n.funcClass === "A"
     ? resolveRecipeA(n.actionHrid!).inputs
     : resolveRecipeB(n.mainItemHrid!, n.actionHrid!.split("/").pop() as AlchemyActionKey, n.catalystRank ?? 0).inputs
-  const outputPins = getFuncOutputPins(n)
+  // 主输入 pin（升级物 / 分解物）带连线物品的强化等级，才能与计算器条目（level=originLevel/enhanceLevel）匹配
+  const key = n.actionHrid!.split("/").pop()
+  const mainPinHasLevel = (n.funcClass === "A" && !!getActionDetailOf(n.actionHrid!).upgradeItemHrid) || key === "decompose"
+  if (mainPinHasLevel && inputPins.length) {
+    inputPins[0] = { ...inputPins[0], level: mainLevel }
+  }
+  const outputPins = getFuncOutputPins(n, mainLevel)
   const ingEntries = calc.ingredientList.map(e => ({ hrid: e.hrid, level: e.level ?? 0 }))
   const outEntries = calc.productList.map(p => ({ hrid: p.hrid, level: p.level ?? 0 }))
   return {
@@ -216,6 +207,13 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
   // 以第一行用户填写的数量为配平基准
   const baseQ = rows[0]?.count ?? 100
 
+  /** 函数节点主输入 pin 上连线物品的强化等级（A 类继承 / B 类分解强化精华用） */
+  function mainInputLevelOf(func: GraphNode): number {
+    const mainWire = wires.find(w => w.toPinId === `${func.id}:in:main`)
+    const src = mainWire ? nodeMap.get(mainWire.fromPinId.split(":")[0]) : undefined
+    return src?.kind === "var" ? (src.level ?? 0) : 0
+  }
+
   /** 纯传播一轮：返回节点数量、函数批次数与采集耗时，不写回也不结算 */
   function runPass(base: number): PassResult {
     const nodeQ = new Map<string, number>()
@@ -277,7 +275,7 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       if (producerWire) {
         const func = nodeMap.get(producerWire.fromPinId.split(":")[0])
         if (func && func.kind === "func" && isFuncResolved(func) && !processedFuncs.has(func.id)) {
-          const recipe = buildNodeRecipe(func) /* 现场构造：speed/buff 取当前玩家配置 */
+          const recipe = buildNodeRecipe(func, mainInputLevelOf(func)) /* 现场构造：speed/buff 取当前玩家配置 */
           if (recipe) {
             const idx = recipe.outputEntryIdx[pinIndexOf(producerWire.fromPinId)]
             const outEntry = idx >= 0 ? recipe.outputs[idx] : undefined
@@ -293,7 +291,7 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         const func = nodeMap.get(w.toPinId.split(":")[0])
         if (!func || func.kind !== "func" || !isFuncResolved(func)) continue
         if (processedFuncs.has(func.id)) continue
-        const recipe = buildNodeRecipe(func) /* 现场构造：speed/buff 取当前玩家配置 */
+        const recipe = buildNodeRecipe(func, mainInputLevelOf(func)) /* 现场构造：speed/buff 取当前玩家配置 */
         if (!recipe) continue
         const idx = recipe.inputEntryIdx[pinIndexOf(w.toPinId)]
         const inEntry = idx >= 0 ? recipe.inputs[idx] : undefined
@@ -333,12 +331,16 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
     const q = nodeQ.get(v.id)
     if (q == null) continue
     const level = v.level ?? 0
-    // 购买/来自背包的红节点计入成本
+    // 购买/来自背包/NPC 购买的红节点计入成本
     if (v.varKind === "red" && v.hrid) {
       if (v.obtain === "gather") continue
       let price = usedPrice(v.hrid, level, "ask")
-      // 来自背包：按所选买入侧价格 ×（1-税率）计价（左价/左价-/右价/右价+；市场价格不做换算）
-      if (v.obtain === "backpack" && gameStore.buyStatus !== PriceStatus.MARKET) {
+      if (v.obtain === "npc") {
+        // NPC 固定价格购买（奶酪武器/木制武器/工具 5000；实习护符 250000），不受市场价与税率影响
+        const npc = getNpcPriceOf(v.hrid)
+        if (npc != null) price = npc
+      } else if (v.obtain === "backpack" && gameStore.buyStatus !== PriceStatus.MARKET) {
+        // 来自背包：按所选买入侧价格 ×（1-税率）计价（左价/左价-/右价/右价+；市场价格不做换算）
         price = price * SELL_TAX_FACTOR
       }
       const cost = q * price

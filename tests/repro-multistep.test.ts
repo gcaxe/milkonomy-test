@@ -257,3 +257,124 @@ it("分解产物同名不混淆：两种炼金精华数量各归其位（task06�
   // 修复前两者相等（≈15.8）；修复后必须不同且平凡流远小于成功流
   expect(Math.abs(qSuccess - qMundane)).toBeGreaterThan(1)
 }, 600000)
+
+it("配方码编解码往返（task07-1）", async () => {
+  await boot()
+  const { _compactifyPlan, _fromBase62, _hydratePlan, _toBase62 } = await import("@/pages/multistep/utils/planCode")
+  const plan = {
+    name: "配方一",
+    rows: [
+      { uid: 1, hrid: "/items/cheese_sword", count: 2.5 },
+      { uid: 2, hrid: null, count: 1 }
+    ],
+    nodes: [
+      { id: "red-1", kind: "var", varKind: "red", hrid: "/items/cheese_sword", level: 4, count: 2.5, rowUid: 1, obtain: "npc", sellMode: "keep", x: 10, y: 20 },
+      { id: "func-1", kind: "func", funcClass: "A", hrid: "", mainItemHrid: "/items/arcane_crossbow", actionHrid: "/actions/crafting/arcane_crossbow", x: 0, y: 0 },
+      { id: "green-1", kind: "var", varKind: "green", hrid: "/items/arcane_crossbow", level: 3, count: 0.8, sellMode: "sell", createdBy: "func-1", x: 0, y: 0 },
+      { id: "green-2", kind: "var", varKind: "green", hrid: "/items/arcane_crossbow", level: 2, count: 0.2, sellMode: "sell", createdBy: "func-1", x: 0, y: 0 },
+      { id: "enh-1", kind: "func", funcClass: "C", hrid: "", mainItemHrid: "/items/cheese_sword", enhanceLevel: 5, protectLevel: 5, protectionHrid: "/items/mirror_of_protection", x: 0, y: 0 }
+    ],
+    wires: [
+      { id: "w1", fromPinId: "func-1:out:main", toPinId: "green-1:in:main" },
+      { id: "w2", fromPinId: "func-1:out:1", toPinId: "green-2:in:main" },
+      { id: "w3", fromPinId: "red-1:out:main", toPinId: "enh-1:in:main" }
+    ],
+    savedAt: 123
+  } as any
+  const compact = _compactifyPlan(plan)
+  const code = _toBase62(new TextEncoder().encode(JSON.stringify(compact)))
+  const back = _fromBase62(code)
+  const hydrated = _hydratePlan(JSON.parse(new TextDecoder().decode(back)))
+
+  expect(hydrated.rows.length).toBe(2)
+  expect(hydrated.rows[0]).toMatchObject({ hrid: "/items/cheese_sword", count: 2.5 })
+  expect(hydrated.rows[1].hrid).toBeNull()
+  expect(hydrated.nodes.length).toBe(5)
+  const red = hydrated.nodes.find((n: any) => n.kind === "var" && n.varKind === "red") as any
+  expect(red.level).toBe(4)
+  expect(red.obtain).toBe("npc")
+  expect(red.rowUid).toBe(hydrated.rows[0].uid)
+  const func = hydrated.nodes.find((n: any) => n.kind === "func" && n.funcClass === "A") as any
+  expect(func.mainItemHrid).toBe("/items/arcane_crossbow")
+  const enh = hydrated.nodes.find((n: any) => n.funcClass === "C") as any
+  expect(enh.enhanceLevel).toBe(5)
+  expect(enh.protectionHrid).toBe("/items/mirror_of_protection")
+  // createdBy 重映射到新节点 id
+  const greens = hydrated.nodes.filter((n: any) => n.kind === "var" && n.varKind === "green") as any[]
+  expect(greens.every(g => g.createdBy === func.id)).toBe(true)
+  // wires 端点按新 id 重映射
+  expect(hydrated.wires.length).toBe(3)
+  const g1 = greens.find(g => g.level === 3)!
+  expect(hydrated.wires.some(w => w.fromPinId === `${func.id}:out:main` && w.toPinId === `${g1.id}:in:main`)).toBe(true)
+  expect(hydrated.wires.some(w => w.fromPinId === `${red.id}:out:main` && w.toPinId === `${enh.id}:in:main`)).toBe(true)
+  // 无效字符报错
+  expect(() => _fromBase62("abc$def")).toThrow()
+  console.log(`[配方码] 往返成功，编码长度 ${code.length}`)
+}, 600000)
+
+it("nPC 固定价格购买：3×奶酪剑 = 15000（task07-3）", async () => {
+  const { balanceAndMutate } = await boot()
+  const rows = [{ uid: 1, hrid: "/items/cheese_sword", count: 3 }]
+  const nodes = [{ id: "red-1", kind: "var", varKind: "red", hrid: "/items/cheese_sword", level: 0, rowUid: 1, obtain: "npc", x: 0, y: 0 }] as any[]
+  const r = balanceAndMutate(nodes, [], rows)
+  expect(r.totalCost).toBeCloseTo(3 * 5000, 3)
+  expect(r.startItemCost).toBeCloseTo(15000, 3)
+  // 实习护符 250000
+  const rows2 = [{ uid: 1, hrid: "/items/trainee_alchemy_charm", count: 2 }]
+  const nodes2 = [{ id: "red-1", kind: "var", varKind: "red", hrid: "/items/trainee_alchemy_charm", level: 0, rowUid: 1, obtain: "npc", x: 0, y: 0 }] as any[]
+  const r2 = balanceAndMutate(nodes2, [], rows2)
+  expect(r2.totalCost).toBeCloseTo(2 * 250000, 3)
+  console.log(`[NPC] 3×奶酪剑=${r.totalCost} 2×实习炼金护符=${r2.totalCost}`)
+}, 600000)
+
+it("三造继承强化等级：+4 红杉弩 → 0.8×+3 奥术弩 + 0.2×+2 奥术弩（task07-2）", async () => {
+  const { balanceAndMutate } = await boot()
+  const rows = [
+    { uid: 1, hrid: "/items/redwood_crossbow", count: 1 },
+    { uid: 2, hrid: "/items/arcane_lumber", count: 0 }
+  ]
+  const nodes = [
+    { id: "red-1", kind: "var", varKind: "red", hrid: "/items/redwood_crossbow", level: 4, rowUid: 1, obtain: "buy", x: 0, y: 0 },
+    { id: "red-2", kind: "var", varKind: "red", hrid: "/items/arcane_lumber", level: 0, rowUid: 2, obtain: "buy", x: 0, y: 0 },
+    { id: "func-1", kind: "func", funcClass: "A", hrid: "", mainItemHrid: "/items/arcane_crossbow", actionHrid: "/actions/crafting/arcane_crossbow", x: 0, y: 0 },
+    { id: "green-2", kind: "var", varKind: "green", hrid: "/items/arcane_crossbow", level: 2, sellMode: "sell", x: 0, y: 0 },
+    { id: "green-3", kind: "var", varKind: "green", hrid: "/items/arcane_crossbow", level: 3, sellMode: "sell", x: 0, y: 0 }
+  ] as any[]
+  const wires = [
+    { id: "w1", fromPinId: "red-1:out:main", toPinId: "func-1:in:main" },
+    { id: "w2", fromPinId: "red-2:out:main", toPinId: "func-1:in:1" },
+    { id: "w3", fromPinId: "func-1:out:main", toPinId: "green-2:in:main" },
+    { id: "w4", fromPinId: "func-1:out:1", toPinId: "green-3:in:main" }
+  ] as any[]
+  void balanceAndMutate(nodes, wires, rows)
+  const q2 = nodes.find((n: any) => n.id === "green-2").count
+  const q3 = nodes.find((n: any) => n.id === "green-3").count
+  console.log(`[继承] +4 红杉弩 → +2 奥术弩=${q2.toFixed(4)}（期望 0.2） +3 奥术弩=${q3.toFixed(4)}（期望 0.8）`)
+  expect(q2).toBeCloseTo(0.2, 3)
+  expect(q3).toBeCloseTo(0.8, 3)
+}, 600000)
+
+it("强化分解：+14 棉花手套分解产出强化精华 19825×成功率（task07-4）", async () => {
+  const { balanceAndMutate } = await boot()
+  const { DecomposeCalculator } = await import("@/calculator/alchemy")
+  const gloves = "/items/cotton_gloves"
+  const rows = [{ uid: 1, hrid: gloves, count: 1 }]
+  const nodes = [
+    { id: "red-1", kind: "var", varKind: "red", hrid: gloves, level: 14, rowUid: 1, obtain: "buy", x: 0, y: 0 },
+    { id: "func-1", kind: "func", funcClass: "B", hrid: "", mainItemHrid: gloves, actionHrid: "/actions/alchemy/decompose", catalystRank: 0, x: 0, y: 0 },
+    { id: "green-1", kind: "var", varKind: "green", hrid: "/items/enhancing_essence", level: 0, sellMode: "sell", x: 0, y: 0 },
+    { id: "green-2", kind: "var", varKind: "green", hrid: "/items/cotton_fabric", level: 0, sellMode: "sell", x: 0, y: 0 }
+  ] as any[]
+  const wires = [
+    { id: "w1", fromPinId: "red-1:out:main", toPinId: "func-1:in:main" },
+    { id: "w2", fromPinId: "func-1:out:main", toPinId: "green-1:in:main" },
+    { id: "w3", fromPinId: "func-1:out:1", toPinId: "green-2:in:main" }
+  ] as any[]
+  void balanceAndMutate(nodes, wires, rows)
+  const calc = new DecomposeCalculator({ hrid: gloves, project: "处理方式", catalystRank: 0, enhanceLevel: 14 })
+  const expected = calc.productList[0].count * calc.successRate
+  const q = nodes.find((n: any) => n.id === "green-1").count
+  console.log(`[强化分解] +14 棉花手套 → 强化精华=${q.toFixed(2)}（期望 ${expected.toFixed(2)}，19825×成功率）`)
+  expect(calc.productList[0].count).toBeCloseTo(19825, 0)
+  expect(q).toBeCloseTo(expected, 1)
+}, 600000)

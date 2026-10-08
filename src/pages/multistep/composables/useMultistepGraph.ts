@@ -37,17 +37,24 @@ export function useMultistepGraph() {
     return !!n.actionHrid && (n.funcClass === "A" || n.catalystRank != null)
   }
 
-  /** 统一配方描述：输入 {hrid, auto}，输出 {hrid, level, mundane}（mundane=平凡产物，可隐藏且不乘成功率） */
+  /** 统一配方描述：输入 {hrid, auto}，输出 {hrid, level, mundane}（mundane=平凡产物，可隐藏） */
   interface PinRecipe {
     inputs: { hrid: string, auto: boolean }[]
     outputs: { hrid: string, level: number, mundane: boolean }[]
   }
 
-  /** 缓存解析结果避免重复计算（key = nodeId + 配方参数） */
+  /** 函数节点主输入 pin 上连线物品的强化等级（A 类继承 / B 类分解强化精华用） */
+  function mainInputLevelOf(n: GraphNode): number {
+    const mainWire = wires.value.find(w => w.toPinId === `${n.id}:in:main`)
+    const src = mainWire ? nodeById(mainWire.fromPinId.split(":")[0]) : undefined
+    return src?.kind === "var" ? (src.level ?? 0) : 0
+  }
+
+  /** 缓存解析结果避免重复计算（key = nodeId + 配方参数 + 主输入等级） */
   const recipeCache = new Map<string, PinRecipe>()
-  function resolveFuncRecipe(n: GraphNode): PinRecipe {
+  function resolveFuncRecipe(n: GraphNode, mainLevel: number = mainInputLevelOf(n)): PinRecipe {
     if (!isFuncResolved(n)) return { inputs: [], outputs: [] }
-    const key = `${n.id}-${n.actionHrid ?? "C"}-${n.catalystRank ?? 0}-${n.mainItemHrid ?? ""}-${n.enhanceLevel ?? 0}-${n.protectLevel ?? 0}-${n.protectionHrid ?? ""}`
+    const key = `${n.id}-${n.actionHrid ?? "C"}-${n.catalystRank ?? 0}-${n.mainItemHrid ?? ""}-${n.enhanceLevel ?? 0}-${n.protectLevel ?? 0}-${n.protectionHrid ?? ""}-${mainLevel}`
     if (!recipeCache.has(key)) {
       if (n.funcClass === "C") {
         const r = resolveEnhanceRecipe(n)
@@ -57,10 +64,10 @@ export function useMultistepGraph() {
         })
       } else if (n.funcClass === "A") {
         const r = resolveRecipeA(n.actionHrid!)
-        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n) })
+        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n, mainLevel) })
       } else {
         const r = resolveRecipeB(n.mainItemHrid!, n.actionHrid!.split("/").pop() as AlchemyActionKey, n.catalystRank ?? 0)
-        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n) })
+        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n, mainLevel) })
       }
     }
     return recipeCache.get(key)!
@@ -72,9 +79,16 @@ export function useMultistepGraph() {
     return r.inputs[index]?.position ?? "left"
   }
 
-  // —— 引脚：由 nodes 确定性派生（不持久化） ——
+  // —— 引脚：由 nodes+wires 确定性派生（不持久化；主输入等级会影响配方输出 pin） ——
   const pins = computed<GraphPin[]>(() => {
     const list: GraphPin[] = []
+    const wireList = wires.value // 建立对连线的响应式依赖
+    /** pin 上连线物品的强化等级（无连线 = 0） */
+    const wiredLevelOf = (pinId: string): number => {
+      const w = wireList.find(x => x.toPinId === pinId)
+      const src = w ? nodeById(w.fromPinId.split(":")[0]) : undefined
+      return src?.kind === "var" ? (src.level ?? 0) : 0
+    }
     for (const n of nodes.value) {
       if (n.kind === "var") {
         list.push({ id: `${n.id}:in:main`, nodeId: n.id, side: "in", role: "normal", itemHrid: n.hrid, itemLevel: n.level ?? 0 })
@@ -86,16 +100,19 @@ export function useMultistepGraph() {
           list.push({ id: `${n.id}:out:main`, nodeId: n.id, side: "out", role: "main", itemHrid: n.mainItemHrid ?? "", itemLevel: n.funcClass === "C" ? (n.enhanceLevel ?? 0) : 0, position: "bottom" })
         } else {
           const recipe = resolveFuncRecipe(n)
-          recipe.inputs.forEach((input, i) => list.push({
-            id: `${n.id}:in:${i === 0 ? "main" : i}`,
-            nodeId: n.id,
-            side: "in",
-            role: i === 0 ? "main" : "normal",
-            itemHrid: input.hrid,
-            itemLevel: 0,
-            auto: input.auto,
-            position: n.funcClass === "C" ? enhancePinPosition(n, i) : undefined
-          }))
+          recipe.inputs.forEach((input, i) => {
+            const pinId = `${n.id}:in:${i === 0 ? "main" : i}`
+            list.push({
+              id: pinId,
+              nodeId: n.id,
+              side: "in",
+              role: i === 0 ? "main" : "normal",
+              itemHrid: input.hrid,
+              itemLevel: wiredLevelOf(pinId),
+              auto: input.auto,
+              position: n.funcClass === "C" ? enhancePinPosition(n, i) : undefined
+            })
+          })
           recipe.outputs.forEach((out, i) => list.push({
             id: `${n.id}:out:${i === 0 ? "main" : i}`,
             nodeId: n.id,
@@ -340,16 +357,17 @@ export function useMultistepGraph() {
     // 一个 pin 只能连出一条线
     if (wires.value.some(w => w.fromPinId === outPin.id)) return getTrans("该输出引脚已连接")
 
-    // —— 变量 → 变量（仅允许：绿 → 红 同名同等级 合并） ——
+    // —— 变量 → 变量（仅允许：绿 → 红 同名合并；等级不同时红节点采用绿节点等级） ——
     if (outNode.kind === "var" && inNode.kind === "var") {
       if (outNode.varKind !== "green" || inNode.varKind !== "red") {
-        return getTrans("仅同名同等级绿色节点可连到红色输入引脚")
+        return getTrans("仅同名绿色节点可连到红色输入引脚")
       }
       if (!outNode.hrid || outNode.hrid !== inNode.hrid) {
-        return getTrans("仅同名同等级绿色节点可连到红色输入引脚")
+        return getTrans("仅同名绿色节点可连到红色输入引脚")
       }
+      // 等级采用：绿节点是生产者，其强化等级为准（如 +4 奶酪剑喂给锻造节点）
       if ((outNode.level ?? 0) !== (inNode.level ?? 0)) {
-        return getTrans("仅同名同等级绿色节点可连到红色输入引脚")
+        inNode.level = outNode.level ?? 0
       }
       // 禁止合并：炼金（如转化）中产物与主要原料相同，合并会形成输入=输出的循环
       const producerWire = wires.value.find(w => w.toPinId === `${outNode.id}:in:main`)
@@ -565,11 +583,12 @@ export function useMultistepGraph() {
     return false
   }
 
-  /** 红绿同名同等级合并：记录信息 → 删两节点+红节点行 → 建蓝节点 → 重连 */
+  /** 红绿同名合并：记录信息 → 删两节点+红节点行 → 建蓝节点 → 重连；等级不同时红采用绿的等级 */
   function mergeVarNodes(greenNode: GraphNode, redNode: GraphNode) {
     // 1. 记录
     const hrid = greenNode.hrid
     const level = greenNode.level ?? 0
+    const levelAdopted = (redNode.level ?? 0) !== level
     const greenInputWire = wires.value.find(w => w.toPinId === `${greenNode.id}:in:main`)
     const redOutputWires = wires.value.filter(w => w.fromPinId === `${redNode.id}:out:main`)
     const redRowUid = redNode.rowUid
@@ -594,6 +613,14 @@ export function useMultistepGraph() {
     // 4. 重连：蓝.in ← 绿的原生产连线；蓝.out → 红的原消耗连线
     if (greenInputWire) wires.value.push({ id: nextId("wire"), fromPinId: greenInputWire.fromPinId, toPinId: `${blue.id}:in:main` })
     for (const w of redOutputWires) wires.value.push({ id: nextId("wire"), fromPinId: `${blue.id}:out:main`, toPinId: w.toPinId })
+    // 5. 等级被采用时：消费该物品的函数节点配方随主输入等级变化（A 继承 0.7 / 分解强化精华），重建其展开
+    if (levelAdopted) {
+      const consumers = new Set<string>()
+      for (const w of redOutputWires) consumers.add(w.toPinId.split(":")[0])
+      for (const func of nodes.value.filter(n => n.kind === "func" && consumers.has(n.id) && isFuncResolved(n))) {
+        reapplyResolvedRecipe(func)
+      }
+    }
     // 按 pin 占用规则定色（绿.in + 红.out 都在 → 蓝）
     maintainInvariants()
     layout()
@@ -738,7 +765,7 @@ export function useMultistepGraph() {
       nodes.value = clone.nodes ?? []
       wires.value = clone.wires ?? []
       positions.value = {}
-      planName.value = clone.name
+      planName.value = clone.name || planName.value
       // 更新 id 计数器（节点与连线都要扫），避免之后新建节点/连线与已加载 id 冲突
       for (const n of nodes.value) {
         const m = /(\d+)$/.exec(n.id)
