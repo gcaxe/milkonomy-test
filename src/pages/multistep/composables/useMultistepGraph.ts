@@ -5,11 +5,17 @@ import { getActionDetailOf, getGameDataApi, getItemDetailOf } from "@/common/api
 import locales, { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
 import { deleteRecipe, loadRecipes, saveRecipe } from "../utils/planStore"
-import { type AlchemyActionKey, findProducingActionOf, getAlchemyActionOptionsOf, getGatherActionsOf, getMundaneProductHridsOf, resolveEnhanceRecipe, resolveRecipeA, resolveRecipeB } from "../utils/recipes"
+import { type AlchemyActionKey, findProducingActionOf, getAlchemyActionOptionsOf, getFuncOutputPins, getGatherActionsOf, resolveEnhanceRecipe, resolveRecipeA, resolveRecipeB } from "../utils/recipes"
 import { useMultistepCalc } from "./useMultistepCalc"
 
 let seq = 0
 const nextId = (prefix: string) => `${prefix}-${++seq}`
+
+/** pin id → 索引（`${nodeId}:out:main` → 0，`${nodeId}:in:2` → 2） */
+function pinIndexOf(pinId: string): number {
+  const seg = pinId.split(":").pop() ?? "main"
+  return seg === "main" ? 0 : Number(seg)
+}
 
 export function useMultistepGraph() {
   // —— 状态（暂不持久化：刷新页面即清空，配方用「保存/读取配方」存取） ——
@@ -31,10 +37,10 @@ export function useMultistepGraph() {
     return !!n.actionHrid && (n.funcClass === "A" || n.catalystRank != null)
   }
 
-  /** 统一配方描述：输入 {hrid, auto}，输出 {hrid, level} */
+  /** 统一配方描述：输入 {hrid, auto}，输出 {hrid, level, mundane}（mundane=平凡产物，可隐藏且不乘成功率） */
   interface PinRecipe {
     inputs: { hrid: string, auto: boolean }[]
-    outputs: { hrid: string, level: number }[]
+    outputs: { hrid: string, level: number, mundane: boolean }[]
   }
 
   /** 缓存解析结果避免重复计算（key = nodeId + 配方参数） */
@@ -47,14 +53,14 @@ export function useMultistepGraph() {
         const r = resolveEnhanceRecipe(n)
         recipeCache.set(key, {
           inputs: r.inputs.map(i => ({ hrid: i.hrid, auto: i.auto })),
-          outputs: r.outputs.map(o => ({ hrid: o.hrid, level: o.level }))
+          outputs: r.outputs.map(o => ({ hrid: o.hrid, level: o.level, mundane: false }))
         })
       } else if (n.funcClass === "A") {
         const r = resolveRecipeA(n.actionHrid!)
-        recipeCache.set(key, { inputs: r.inputs, outputs: r.outputs.map(h => ({ hrid: h, level: 0 })) })
+        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n) })
       } else {
         const r = resolveRecipeB(n.mainItemHrid!, n.actionHrid!.split("/").pop() as AlchemyActionKey, n.catalystRank ?? 0)
-        recipeCache.set(key, { inputs: r.inputs, outputs: r.outputs.map(h => ({ hrid: h, level: 0 })) })
+        recipeCache.set(key, { inputs: r.inputs, outputs: getFuncOutputPins(n) })
       }
     }
     return recipeCache.get(key)!
@@ -667,14 +673,7 @@ export function useMultistepGraph() {
 
   /** 不显示平凡产物（精华/箱子/专精之线等稀有掉落），默认关闭；隐藏不影响利润计算 */
   const hideMundane = ref(false)
-  const mundaneHridByNode = computed(() => {
-    const map = new Map<string, string[]>()
-    for (const f of nodes.value) {
-      if (f.kind === "func" && isFuncResolved(f)) map.set(f.id, getMundaneProductHridsOf(f))
-    }
-    return map
-  })
-  /** 勾选后需要隐藏的绿色节点 id */
+  /** 勾选后需要隐藏的绿色节点 id：按输出 pin 判定（同名同 hrid 的平凡/非平凡产物互不影响，如分解的两种炼金精华） */
   const hiddenMundaneIds = computed(() => {
     const hidden = new Set<string>()
     if (!hideMundane.value) return hidden
@@ -682,10 +681,10 @@ export function useMultistepGraph() {
       if (g.kind !== "var" || g.varKind !== "green") continue
       const producerWire = wires.value.find(w => w.toPinId === `${g.id}:in:main`)
       const producer = producerWire ? nodeById(pinById(producerWire.fromPinId)?.nodeId ?? "") : undefined
-      if (producer && producer.kind === "func") {
-        const mundane = mundaneHridByNode.value.get(producer.id) || []
-        if (mundane.includes(g.hrid)) hidden.add(g.id)
-      }
+      if (!producer || producer.kind !== "func" || !isFuncResolved(producer) || !producerWire) continue
+      const pinIdx = pinIndexOf(producerWire.fromPinId)
+      const out = resolveFuncRecipe(producer).outputs[pinIdx]
+      if (out?.mundane) hidden.add(g.id)
     }
     return hidden
   })

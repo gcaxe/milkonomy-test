@@ -136,6 +136,54 @@ export function resolveRecipeB(mainItemHrid: string, actionKey: AlchemyActionKey
   return { inputs, outputs }
 }
 
+// ===================== 函数节点输出 pin（按配方顺序） =====================
+
+/** 输出 pin 描述：mundane=平凡产物（稀有/精华掉落，不受炼金成功率影响，可被隐藏） */
+export interface FuncOutputPin {
+  hrid: string
+  level: number
+  mundane: boolean
+}
+
+/**
+ * 函数节点的输出 pin 列表（按配方顺序，与首页计算器 productList 同序）。
+ * B 类炼金的稀有/精华掉落是平凡产物：无论成功失败都会按掉落率产出，
+ * 计算时不应再乘成功率（计算器条目里 count 已 ÷successRate，正好抵消）。
+ */
+export function getFuncOutputPins(node: GraphNode): FuncOutputPin[] {
+  if (node.funcClass === "C") {
+    if (!node.mainItemHrid || node.enhanceLevel == null) return []
+    return [{ hrid: node.mainItemHrid, level: node.enhanceLevel, mundane: false }]
+  }
+  if (node.funcClass === "A") {
+    if (!node.actionHrid) return []
+    const detail = getActionDetailOf(node.actionHrid)
+    return [
+      ...(detail.outputItems || []).map(o => ({ hrid: o.itemHrid, level: 0, mundane: false })),
+      ...(detail.essenceDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true })),
+      ...(detail.rareDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true }))
+    ]
+  }
+  // B 类：主要产物（转化/分解/点金）+ 稀有掉落 + 炼金精华掉落
+  if (!node.mainItemHrid || !node.actionHrid) return []
+  const item = getGameDataApi().itemDetailMap[node.mainItemHrid]
+  if (!item) return []
+  const actionKey = node.actionHrid.split("/").pop() as AlchemyActionKey
+  const timeCost = actionKey === "transmute"
+    ? getTransmuteTimeCost()
+    : actionKey === "decompose" ? getDecomposeTimeCost() : getCoinifyTimeCost()
+  const mains: FuncOutputPin[] = actionKey === "transmute"
+    ? (item.alchemyDetail.transmuteDropTable || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: false }))
+    : actionKey === "decompose"
+      ? (item.alchemyDetail.decomposeItems || []).map(d => ({ hrid: d.itemHrid, level: 0, mundane: false }))
+      : [{ hrid: COIN_HRID, level: 0, mundane: false }]
+  return [
+    ...mains,
+    ...getAlchemyRareDropTable(item, timeCost).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true })),
+    ...getAlchemyEssenceDropTable(item, timeCost).map(d => ({ hrid: d.itemHrid, level: 0, mundane: true }))
+  ]
+}
+
 // ===================== C 类：强化节点 =====================
 
 /** 强化节点的保护物品选项：由被强化物品决定 + 贤者之镜（任何强化都可使用保护之镜作为保护材料） */

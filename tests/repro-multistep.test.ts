@@ -218,3 +218,40 @@ it("默认配方机制：当前数据无重盾链时不误建、不报错（task
   expect(localStorage.getItem("multistep-default-plan-created")).toBeNull()
   console.log("[默认配方] 无重盾链数据时画布为空且未写创建标记（数据更新后首次进入会自动创建「配方一」）")
 }, 600000)
+
+it("分解产物同名不混淆：两种炼金精华数量各归其位（task06）", async () => {
+  const { balanceAndMutate } = await boot()
+  const { DecomposeCalculator } = await import("@/calculator/alchemy")
+  const catalyst = "/items/catalyst_of_decomposition"
+  // 手工构造：驱动红节点 1×分解催化剂 → 炼金-分解（分解催化剂）→ 三个绿色叶子
+  const rows = [{ uid: 1, hrid: catalyst, count: 1 }, { uid: 2, hrid: catalyst, count: 0 }]
+  const nodes = [
+    { id: "red-1", kind: "var", varKind: "red", hrid: catalyst, level: 0, rowUid: 1, obtain: "buy", x: 0, y: 0 },
+    { id: "red-2", kind: "var", varKind: "red", hrid: catalyst, level: 0, rowUid: 2, obtain: "buy", x: 0, y: 0 },
+    { id: "func-1", kind: "func", funcClass: "B", hrid: "", mainItemHrid: catalyst, actionHrid: "/actions/alchemy/decompose", catalystRank: 1, x: 0, y: 0 },
+    { id: "green-1", kind: "var", varKind: "green", hrid: "/items/alchemy_essence", level: 0, sellMode: "sell", x: 0, y: 0 },
+    { id: "green-2", kind: "var", varKind: "green", hrid: "/items/medium_artisans_crate", level: 0, sellMode: "sell", x: 0, y: 0 },
+    { id: "green-3", kind: "var", varKind: "green", hrid: "/items/alchemy_essence", level: 0, sellMode: "sell", x: 0, y: 0 }
+  ] as any[]
+  const wires = [
+    { id: "w1", fromPinId: "red-1:out:main", toPinId: "func-1:in:main" },
+    { id: "w2", fromPinId: "red-2:out:main", toPinId: "func-1:in:1" },
+    { id: "w3", fromPinId: "func-1:out:main", toPinId: "green-1:in:main" },
+    { id: "w4", fromPinId: "func-1:out:1", toPinId: "green-2:in:main" },
+    { id: "w5", fromPinId: "func-1:out:2", toPinId: "green-3:in:main" }
+  ] as any[]
+  void balanceAndMutate(nodes, wires, rows)
+  // 计算器口径：主要产物（成功流）25×成功率；平凡掉落流 count×rate（无论成功失败）
+  const calc = new DecomposeCalculator({ hrid: catalyst, project: "处理方式", catalystRank: 1 })
+  const successEssence = calc.productList[0]
+  const mundaneEssence = calc.productList[2]
+  const expectedSuccess = 1 * successEssence.count * (successEssence.rate ?? 1) * calc.successRate
+  const expectedMundane = 1 * mundaneEssence.count * (mundaneEssence.rate ?? 1)
+  const qSuccess = nodes.find((n: any) => n.id === "green-1").count
+  const qMundane = nodes.find((n: any) => n.id === "green-3").count
+  console.log(`[分解] 成功率=${(calc.successRate * 100).toFixed(2)}% 成功流=${qSuccess.toFixed(4)}（期望 ${expectedSuccess.toFixed(4)}） 平凡流=${qMundane.toFixed(4)}（期望 ${expectedMundane.toFixed(4)}）`)
+  expect(qSuccess).toBeCloseTo(expectedSuccess, 2)
+  expect(qMundane).toBeCloseTo(expectedMundane, 3)
+  // 修复前两者相等（≈15.8）；修复后必须不同
+  expect(Math.abs(qSuccess - qMundane)).toBeGreaterThan(1)
+}, 600000)

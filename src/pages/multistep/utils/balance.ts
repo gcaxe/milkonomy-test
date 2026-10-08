@@ -1,15 +1,13 @@
 import type { GraphNode, GraphWire, NodeCalcResult, UpupItemRow } from "../types"
-import type { IngredientWithPrice, ProductWithPrice } from "@/calculator"
 import type { Action } from "~/game"
 import { CoinifyCalculator, DecomposeCalculator, TransmuteCalculator } from "@/calculator/alchemy"
 import { GatherCalculator } from "@/calculator/gather"
 import { ManufactureCalculator } from "@/calculator/manufacture"
-import { getPriceOf } from "@/common/apis/game"
 import { getUsedPriceOf } from "@/common/apis/price"
 import { SELL_TAX_FACTOR } from "@/common/constants/market"
 import { getTrans } from "@/locales"
 import { COIN_HRID, PriceStatus, useGameStore } from "@/pinia/stores/game"
-import { getGatherActionsOf, resolveEnhanceRecipe } from "./recipes"
+import { type AlchemyActionKey, getFuncOutputPins, getGatherActionsOf, resolveEnhanceRecipe, resolveRecipeA, resolveRecipeB } from "./recipes"
 
 /** 单批配平结果 */
 export interface BalanceResult {
@@ -92,31 +90,72 @@ function isFuncResolved(n: GraphNode): boolean {
 interface NodeRecipe {
   /** 首页计算器（强化节点为 null） */
   calc: ReturnType<typeof buildFuncCalculator>
+  /** 输入条目（与计算器 ingredientList 同源；强化节点为自身输入列表） */
   inputs: { hrid: string, count: number, level: number, auto: boolean }[]
-  outputs: { hrid: string, count: number, rate: number, level: number }[]
+  /** 输入 pin i → inputs 索引（无对应条目为 -1）；同名输入按顺序逐一匹配 */
+  inputEntryIdx: number[]
+  /** 输出条目（与计算器 productList 同源；强化节点为自身输出列表） */
+  outputs: { hrid: string, count: number, rate: number, level: number, successGated: boolean }[]
+  /** 输出 pin i → outputs 索引（无对应条目为 -1）；同名输出按顺序逐一匹配 */
+  outputEntryIdx: number[]
   /** 每批耗时 ns（已按效率折算） */
   timeCostPerBatch: number
   successRate: number
+}
+
+/** pin id → 索引（`${nodeId}:out:main` → 0，`${nodeId}:in:2` → 2） */
+function pinIndexOf(pinId: string): number {
+  const seg = pinId.split(":").pop() ?? "main"
+  return seg === "main" ? 0 : Number(seg)
+}
+
+/** 按顺序把 pin 匹配到条目（同名条目各归其位：如分解的两种炼金精华分属不同 pin） */
+function matchPinsInOrder(pins: { hrid: string, level?: number }[], entries: { hrid: string, level: number }[]): number[] {
+  const used = new Set<number>()
+  return pins.map((p) => {
+    const idx = entries.findIndex((e, i) => !used.has(i) && e.hrid === p.hrid && (e.level ?? 0) === (p.level ?? 0))
+    if (idx >= 0) used.add(idx)
+    return idx
+  })
 }
 
 function buildNodeRecipe(n: GraphNode): NodeRecipe | null {
   if (!isFuncResolved(n)) return null
   if (n.funcClass === "C") {
     const r = resolveEnhanceRecipe(n)
+    const inputs = r.inputs.map(i => ({ hrid: i.hrid, count: i.count, level: i.level, auto: i.auto }))
+    const outputs = r.outputs.map(o => ({ hrid: o.hrid, count: o.count, rate: 1, level: o.level, successGated: true }))
     return {
       calc: null,
-      inputs: r.inputs.map(i => ({ hrid: i.hrid, count: i.count, level: i.level, auto: i.auto })),
-      outputs: r.outputs.map(o => ({ hrid: o.hrid, count: o.count, rate: 1, level: o.level })),
+      inputs,
+      inputEntryIdx: inputs.map((_, i) => i),
+      outputs,
+      outputEntryIdx: outputs.map((_, i) => i),
       timeCostPerBatch: r.timeCost,
       successRate: 1
     }
   }
   const calc = buildFuncCalculator(n)!
+  const inputPins = n.funcClass === "A"
+    ? resolveRecipeA(n.actionHrid!).inputs
+    : resolveRecipeB(n.mainItemHrid!, n.actionHrid!.split("/").pop() as AlchemyActionKey, n.catalystRank ?? 0).inputs
+  const outputPins = getFuncOutputPins(n)
+  const ingEntries = calc.ingredientList.map(e => ({ hrid: e.hrid, level: e.level ?? 0 }))
+  const outEntries = calc.productList.map(p => ({ hrid: p.hrid, level: p.level ?? 0 }))
   return {
     calc,
     // 输入取计算器 ingredientList（含金币/茶等自动供给项）；数量为每动作消耗
     inputs: calc.ingredientList.map(e => ({ hrid: e.hrid, count: e.count, level: e.level ?? 0, auto: false })),
-    outputs: calc.productList.map(p => ({ hrid: p.hrid, count: p.count, rate: p.rate ?? 1, level: p.level ?? 0 })),
+    inputEntryIdx: matchPinsInOrder(inputPins, ingEntries),
+    // 输出取计算器 productList；平凡产物（稀有/精华掉落）不受炼金成功率影响（条目 count 已 ÷successRate）
+    outputs: calc.productList.map((p, i) => ({
+      hrid: p.hrid,
+      count: p.count,
+      rate: p.rate ?? 1,
+      level: p.level ?? 0,
+      successGated: !outputPins[i]?.mundane
+    })),
+    outputEntryIdx: matchPinsInOrder(outputPins, outEntries),
     timeCostPerBatch: calc.effectiveTimeCost / calc.efficiency,
     successRate: calc.successRate
   }
@@ -187,28 +226,31 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
     const queue: GraphNode[] = [driverNode]
     let gatherTime = 0
 
-    /** 处理一个函数节点：按配方向其他输入/输出传播数量 */
+    /** 处理一个函数节点：按配方向其他输入/输出传播数量（同名条目按 pin 顺序各归其位） */
     function processFunc(func: GraphNode, recipe: NodeRecipe, actions: number) {
       processedFuncs.add(func.id)
       funcActions.set(func.id, { actions, recipe })
-      // 输入变量（每个输入 pin 一条线，按 hrid+等级 与配方输入对应）
+      // 输入变量（每个输入 pin 一条线，按 pin 索引对应配方输入条目）
       for (const iw of wires.filter(x => x.toPinId.startsWith(`${func.id}:`))) {
         const src = nodeMap.get(iw.fromPinId.split(":")[0])
         if (!src || src.kind !== "var") continue
         if (nodeQ.has(src.id)) continue
-        const entry = recipe.inputs.find(i => i.hrid === src.hrid && (i.level ?? 0) === (src.level ?? 0))
+        const idx = recipe.inputEntryIdx[pinIndexOf(iw.toPinId)]
+        const entry = idx >= 0 ? recipe.inputs[idx] : undefined
         if (!entry) continue
         const qIn = actions * entry.count
         nodeQ.set(src.id, qIn)
         queue.push(src)
       }
-      // 输出变量（期望 = count × rate × 成功率；炼金失败时什么都不给）
+      // 输出变量（期望 = count × rate ×（平凡产物不乘成功率：无论成功失败都有））
       for (const ow of wires.filter(x => x.fromPinId.startsWith(`${func.id}:`))) {
         const tgt = nodeMap.get(ow.toPinId.split(":")[0])
         if (!tgt || tgt.kind !== "var") continue
-        const entry = recipe.outputs.find(p => p.hrid === tgt.hrid && (p.level ?? 0) === (tgt.level ?? 0))
+        const idx = recipe.outputEntryIdx[pinIndexOf(ow.fromPinId)]
+        const entry = idx >= 0 ? recipe.outputs[idx] : undefined
         if (!entry) continue
-        const qOut = actions * entry.count * entry.rate * recipe.successRate
+        const successFactor = entry.successGated ? recipe.successRate : 1
+        const qOut = actions * entry.count * entry.rate * successFactor
         nodeQ.set(tgt.id, qOut)
         queue.push(tgt)
       }
@@ -231,29 +273,32 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         }
       }
 
-      // 1) 上游：该变量的生产函数节点（in-wire 来源）——按产量反推批次数
+      // 1) 上游：该变量的生产函数节点（in-wire 来源）——按产量反推批次数（按 pin 索引取对应输出条目）
       const producerWire = wires.find(w => w.toPinId === `${v.id}:in:main`)
       if (producerWire) {
         const func = nodeMap.get(producerWire.fromPinId.split(":")[0])
         if (func && func.kind === "func" && isFuncResolved(func) && !processedFuncs.has(func.id)) {
           const recipe = buildNodeRecipe(func) /* 现场构造：speed/buff 取当前玩家配置 */
           if (recipe) {
-            const outEntry = recipe.outputs.find(p => p.hrid === v.hrid && (p.level ?? 0) === (v.level ?? 0))
+            const idx = recipe.outputEntryIdx[pinIndexOf(producerWire.fromPinId)]
+            const outEntry = idx >= 0 ? recipe.outputs[idx] : undefined
             if (outEntry) {
-              // 反推同样折算成功率：每批期望产出 = count × rate × successRate
-              processFunc(func, recipe, q / (outEntry.count * outEntry.rate * recipe.successRate))
+              // 反推同样折算成功率（平凡产物不乘）：每批期望产出 = count × rate × successFactor
+              const successFactor = outEntry.successGated ? recipe.successRate : 1
+              processFunc(func, recipe, q / (outEntry.count * outEntry.rate * successFactor))
             }
           }
         }
       }
-      // 2) 下游：消费该变量的函数节点（out-wire 目标）——按消耗量正向传播
+      // 2) 下游：消费该变量的函数节点（out-wire 目标）——按消耗量正向传播（按 pin 索引取对应输入条目）
       for (const w of wires.filter(x => x.fromPinId === `${v.id}:out:main`)) {
         const func = nodeMap.get(w.toPinId.split(":")[0])
         if (!func || func.kind !== "func" || !isFuncResolved(func)) continue
         if (processedFuncs.has(func.id)) continue
         const recipe = buildNodeRecipe(func) /* 现场构造：speed/buff 取当前玩家配置 */
         if (!recipe) continue
-        const inEntry = recipe.inputs.find(i => i.hrid === v.hrid && (i.level ?? 0) === (v.level ?? 0))
+        const idx = recipe.inputEntryIdx[pinIndexOf(w.toPinId)]
+        const inEntry = idx >= 0 ? recipe.inputs[idx] : undefined
         if (inEntry) {
           processFunc(func, recipe, q / inEntry.count)
         }
@@ -302,14 +347,15 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       totalCost += cost
       if (v.id === driverNode.id) startItemCost = cost
     }
-    // 绿色叶子计入税后收入：单价取生产计算器条目的价格（点金金币 = 卖价×5×bulk 等特例靠它）
+    // 绿色叶子计入税后收入：单价取生产计算器条目的价格（按 pin 索引对应，点金金币 = 卖价×5×bulk 等特例靠它）
     if (v.varKind === "green" && v.hrid) {
       const producerWire = wires.find(w => w.toPinId === `${v.id}:in:main`)
       const producer = producerWire ? nodeMap.get(producerWire.fromPinId.split(":")[0]) : undefined
       let price = usedPrice(v.hrid, level, "bid")
-      if (producer && producer.kind === "func") {
+      if (producer && producer.kind === "func" && producerWire) {
         const fa = funcActions.get(producer.id)
-        const entry = fa?.recipe.calc?.productListWithPrice.find(p => p.hrid === v.hrid && (p.level ?? 0) === level)
+        const idx = fa?.recipe.outputEntryIdx[pinIndexOf(producerWire.fromPinId)]
+        const entry = idx != null && idx >= 0 ? fa?.recipe.calc?.productListWithPrice[idx] : undefined
         if (entry) price = entry.price
       }
       const pre = q * price
@@ -325,33 +371,30 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
     const func = nodeMap.get(funcId)
     if (!func) continue
     const { actions, recipe } = fa
-    // 隐藏输入（金币/茶/自动供给）= 配方输入中没有变量连线的条目
-    const wiredKeys = new Set<string>()
-    for (const iw of wires.filter(x => x.toPinId.startsWith(`${func.id}:`))) {
-      const src = nodeMap.get(iw.fromPinId.split(":")[0])
-      if (src?.kind === "var") wiredKeys.add(`${src.hrid}|${src.level ?? 0}`)
-    }
+    // 隐藏输入（金币/茶/自动供给）= 配方输入中没有变量连线的条目（按 pin→条目索引判定）
     let hiddenCost = 0
-    const pricedInputs: (IngredientWithPrice | { hrid: string, count: number, level: number, price: number })[] = []
     if (recipe.calc) {
+      const wiredEntryIdx = new Set<number>()
+      for (const iw of wires.filter(x => x.toPinId.startsWith(`${func.id}:`))) {
+        const src = nodeMap.get(iw.fromPinId.split(":")[0])
+        if (src?.kind !== "var") continue
+        const idx = recipe.inputEntryIdx[pinIndexOf(iw.toPinId)]
+        if (idx >= 0) wiredEntryIdx.add(idx)
+      }
       // 紫节点：单价取计算器 WithPrice 条目（转化/分解的金币成本是特例价，不是 1；手动价已生效）
-      pricedInputs.push(...recipe.calc.ingredientListWithPrice.map(e => ({
-        hrid: e.hrid,
-        count: e.count,
-        level: e.level ?? 0,
-        price: e.price
-      })))
+      for (const [i, e] of recipe.calc.ingredientListWithPrice.entries()) {
+        if (wiredEntryIdx.has(i)) continue
+        if (e.price < 0) continue
+        hiddenCost += actions * e.count * e.price
+      }
     } else {
       // 强化节点：自动供给（金币）按市场价计，材料/保护/本体均由连线供应
       for (const i of recipe.inputs) {
         if (!i.auto) continue
-        pricedInputs.push({ hrid: i.hrid, count: i.count, level: i.level, price: usedPrice(i.hrid, i.level, "ask") })
+        const price = usedPrice(i.hrid, i.level, "ask")
+        if (price < 0) continue
+        hiddenCost += actions * i.count * price
       }
-    }
-    for (const e of pricedInputs) {
-      if (wiredKeys.has(`${e.hrid}|${e.level}`)) continue
-      if (e.price < 0) continue
-      hiddenCost += actions * e.count * e.price
     }
     funcInfo.set(func.id, { actions, timeCostPerBatch: recipe.timeCostPerBatch, hiddenCost })
     totalTime += actions * recipe.timeCostPerBatch
