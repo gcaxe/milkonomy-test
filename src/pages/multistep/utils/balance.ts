@@ -95,7 +95,7 @@ interface NodeRecipe {
   /** 输入 pin i → inputs 索引（无对应条目为 -1）；同名输入按顺序逐一匹配 */
   inputEntryIdx: number[]
   /** 输出条目（与计算器 productList 同源；强化节点为自身输出列表） */
-  outputs: { hrid: string, count: number, rate: number, level: number, successGated: boolean }[]
+  outputs: { hrid: string, count: number, rate: number, level: number }[]
   /** 输出 pin i → outputs 索引（无对应条目为 -1）；同名输出按顺序逐一匹配 */
   outputEntryIdx: number[]
   /** 每批耗时 ns（已按效率折算） */
@@ -124,7 +124,7 @@ function buildNodeRecipe(n: GraphNode): NodeRecipe | null {
   if (n.funcClass === "C") {
     const r = resolveEnhanceRecipe(n)
     const inputs = r.inputs.map(i => ({ hrid: i.hrid, count: i.count, level: i.level, auto: i.auto }))
-    const outputs = r.outputs.map(o => ({ hrid: o.hrid, count: o.count, rate: 1, level: o.level, successGated: true }))
+    const outputs = r.outputs.map(o => ({ hrid: o.hrid, count: o.count, rate: 1, level: o.level }))
     return {
       calc: null,
       inputs,
@@ -147,13 +147,13 @@ function buildNodeRecipe(n: GraphNode): NodeRecipe | null {
     // 输入取计算器 ingredientList（含金币/茶等自动供给项）；数量为每动作消耗
     inputs: calc.ingredientList.map(e => ({ hrid: e.hrid, count: e.count, level: e.level ?? 0, auto: false })),
     inputEntryIdx: matchPinsInOrder(inputPins, ingEntries),
-    // 输出取计算器 productList；平凡产物（稀有/精华掉落）不受炼金成功率影响（条目 count 已 ÷successRate）
-    outputs: calc.productList.map((p, i) => ({
+    // 输出取计算器 productList；全部统一 ×successRate——平凡掉落条目 count 已 ÷successRate，
+    // 相乘后正好得到「不考虑成功失败」的最终期望值（与首页配方数量/h 口径一致）
+    outputs: calc.productList.map(p => ({
       hrid: p.hrid,
       count: p.count,
       rate: p.rate ?? 1,
-      level: p.level ?? 0,
-      successGated: !outputPins[i]?.mundane
+      level: p.level ?? 0
     })),
     outputEntryIdx: matchPinsInOrder(outputPins, outEntries),
     timeCostPerBatch: calc.effectiveTimeCost / calc.efficiency,
@@ -242,15 +242,14 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         nodeQ.set(src.id, qIn)
         queue.push(src)
       }
-      // 输出变量（期望 = count × rate ×（平凡产物不乘成功率：无论成功失败都有））
+      // 输出变量（期望 = count × rate × 成功率；平凡掉落条目 count 已 ÷成功率，相乘即「不考虑成功失败」的最终值）
       for (const ow of wires.filter(x => x.fromPinId.startsWith(`${func.id}:`))) {
         const tgt = nodeMap.get(ow.toPinId.split(":")[0])
         if (!tgt || tgt.kind !== "var") continue
         const idx = recipe.outputEntryIdx[pinIndexOf(ow.fromPinId)]
         const entry = idx >= 0 ? recipe.outputs[idx] : undefined
         if (!entry) continue
-        const successFactor = entry.successGated ? recipe.successRate : 1
-        const qOut = actions * entry.count * entry.rate * successFactor
+        const qOut = actions * entry.count * entry.rate * recipe.successRate
         nodeQ.set(tgt.id, qOut)
         queue.push(tgt)
       }
@@ -283,9 +282,8 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
             const idx = recipe.outputEntryIdx[pinIndexOf(producerWire.fromPinId)]
             const outEntry = idx >= 0 ? recipe.outputs[idx] : undefined
             if (outEntry) {
-              // 反推同样折算成功率（平凡产物不乘）：每批期望产出 = count × rate × successFactor
-              const successFactor = outEntry.successGated ? recipe.successRate : 1
-              processFunc(func, recipe, q / (outEntry.count * outEntry.rate * successFactor))
+              // 反推同样折算成功率：每批期望产出 = count × rate × successRate
+              processFunc(func, recipe, q / (outEntry.count * outEntry.rate * recipe.successRate))
             }
           }
         }
@@ -358,7 +356,8 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         const entry = idx != null && idx >= 0 ? fa?.recipe.calc?.productListWithPrice[idx] : undefined
         if (entry) price = entry.price
       }
-      const pre = q * price
+      // 无挂单（价格 -1）时不计收入（仅提示），避免负数污染利润
+      const pre = price < 0 ? 0 : q * price
       // 金币（点金产物）是货币本身，不计市场税；保留于背包不计税；其余叶子按 4% 计税（与首页计算器口径一致）
       const after = (v.hrid === COIN_HRID || v.sellMode === "keep") ? pre : pre * SELL_TAX_FACTOR
       income += after

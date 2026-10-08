@@ -1,7 +1,7 @@
 import type { GraphNode, GraphPin, GraphWire, MultistepPlan, UpupItemRow } from "../types"
 import { ElMessage } from "element-plus"
 import { computed, ref, toRaw, watch } from "vue"
-import { getActionDetailOf, getGameDataApi, getItemDetailOf } from "@/common/apis/game"
+import { getActionDetailOf, getGameDataApi } from "@/common/apis/game"
 import locales, { getTrans } from "@/locales"
 import { COIN_HRID } from "@/pinia/stores/game"
 import { deleteRecipe, loadRecipes, saveRecipe } from "../utils/planStore"
@@ -510,9 +510,8 @@ export function useMultistepGraph() {
       const pinId = `${func.id}:out:${i === 0 ? "main" : i}`
       // pin 已被用户合并出的蓝节点连线占用，跳过
       if (wires.value.some(w => w.fromPinId === pinId)) return
-      // 不可交易产物（如精炼披风）无法挂单出售，默认保留于背包
-      const outItem = getItemDetailOf(out.hrid)
-      const keepDefault = out.hrid === COIN_HRID || !outItem?.isTradable
+      // 只有金币默认保留于背包（货币本身），其余产物（含匣子/精华/精炼装备）默认出售
+      const keepDefault = out.hrid === COIN_HRID
       const green: GraphNode = {
         id: nextId("green"),
         kind: "var",

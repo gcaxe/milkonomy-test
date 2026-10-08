@@ -241,17 +241,19 @@ it("分解产物同名不混淆：两种炼金精华数量各归其位（task06�
     { id: "w5", fromPinId: "func-1:out:2", toPinId: "green-3:in:main" }
   ] as any[]
   void balanceAndMutate(nodes, wires, rows)
-  // 计算器口径：主要产物（成功流）25×成功率；平凡掉落流 count×rate（无论成功失败）
+  // 计算器口径（与首页配方数量/h 一致）：
+  // 成功流 = 25 × 成功率；平凡掉落流 = count × rate × 成功率（条目 count 已 ÷成功率，
+  // 相乘后即「不考虑成功失败」的最终期望值，如 1.576 × 9.3333% × 63.43% ≈ 0.0933）
   const calc = new DecomposeCalculator({ hrid: catalyst, project: "处理方式", catalystRank: 1 })
   const successEssence = calc.productList[0]
   const mundaneEssence = calc.productList[2]
   const expectedSuccess = 1 * successEssence.count * (successEssence.rate ?? 1) * calc.successRate
-  const expectedMundane = 1 * mundaneEssence.count * (mundaneEssence.rate ?? 1)
+  const expectedMundane = 1 * mundaneEssence.count * (mundaneEssence.rate ?? 1) * calc.successRate
   const qSuccess = nodes.find((n: any) => n.id === "green-1").count
   const qMundane = nodes.find((n: any) => n.id === "green-3").count
   console.log(`[分解] 成功率=${(calc.successRate * 100).toFixed(2)}% 成功流=${qSuccess.toFixed(4)}（期望 ${expectedSuccess.toFixed(4)}） 平凡流=${qMundane.toFixed(4)}（期望 ${expectedMundane.toFixed(4)}）`)
   expect(qSuccess).toBeCloseTo(expectedSuccess, 2)
   expect(qMundane).toBeCloseTo(expectedMundane, 3)
-  // 修复前两者相等（≈15.8）；修复后必须不同
+  // 修复前两者相等（≈15.8）；修复后必须不同且平凡流远小于成功流
   expect(Math.abs(qSuccess - qMundane)).toBeGreaterThan(1)
 }, 600000)
