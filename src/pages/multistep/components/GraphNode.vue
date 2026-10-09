@@ -137,9 +137,25 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
         <span>{{ t('工时占比') }} <b>--</b></span>
       </template>
       <template v-else-if="node.varKind === 'rainbow'">
-        <span class="part blue-part">{{ t('蓝') }} × {{ Format.number(node.count ?? 0, 3) }}</span>
-        <span class="part green-part">{{ t('绿') }} × {{ Format.number(node.greenPart ?? 0, 3) }}</span>
-        <span class="part red-part">{{ t('红') }} × {{ Format.number(node.redPart ?? 0, 3) }}</span>
+        <div class="rainbow-body">
+          <!-- 左 2/3：蓝色区域（物品信息） -->
+          <div class="rainbow-left">
+            <ItemIcon v-if="node.hrid" :hrid="node.hrid" :width="20" :height="20" />
+            <span class="left-name">{{ node.hrid ? `${itemName}${levelText}` : t('未选择物品') }}</span>
+          </div>
+          <!-- 右 1/3：从上到下等分 3 份，分别是蓝、红、绿，标注数量 -->
+          <div class="rainbow-right">
+            <div class="rseg rseg-blue">
+              {{ t('蓝') }} × {{ Format.number(node.count ?? 0, 3) }}
+            </div>
+            <div class="rseg rseg-red">
+              {{ t('红') }} × {{ Format.number(node.redPart ?? 0, 3) }}
+            </div>
+            <div class="rseg rseg-green">
+              {{ t('绿') }} × {{ Format.number(node.greenPart ?? 0, 3) }}
+            </div>
+          </div>
+        </div>
       </template>
     </div>
 

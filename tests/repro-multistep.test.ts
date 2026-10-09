@@ -453,3 +453,41 @@ it("彩虹节点：产量不足时 蓝0/绿0/红=缺额，并计入购买成本�
   const fabricAsk = gpo("/items/cotton_fabric", 0).ask
   expect(r.nodeInfo.get("rainbow-1")!.extraCost).toBeCloseTo(cons * fabricAsk, 0)
 }, 600000)
+
+it("彩虹判定：已存在共享祖先/后代的蓝节点时，新的绿红合并变为彩虹（task09）", async () => {
+  await boot()
+  localStorage.clear()
+  const { useMultistepGraph } = await import("@/pages/multistep/composables/useMultistepGraph")
+  const graph = useMultistepGraph()
+
+  // 驱动行：炼金精华
+  const { row } = graph.addRow()
+  graph.setRowItem(row.uid, "/items/alchemy_essence")
+
+  // A1 = 无催化剂转化炼金精华 → 各色精华绿节点（B 类）
+  const funcA1 = graph.addFuncNode()
+  funcA1.funcClass = "B"
+  funcA1.mainItemHrid = "/items/alchemy_essence"
+  funcA1.actionHrid = "/actions/alchemy/transmute"
+  funcA1.catalystRank = 0
+  graph.onFuncConfigChange(funcA1)
+
+  // Z = 三造制造 catalyst_of_coinification（A 类，消耗挤奶/采摘/伐木精华）
+  const funcZ = graph.addFuncNode()
+  graph.onFuncClassChange(funcZ, "A")
+  graph.onProcessItemChange(funcZ, "/items/catalyst_of_coinification")
+
+  // 先连第一对（挤奶精华）：无既有蓝/彩虹节点 → 正常合并为蓝
+  const green1 = graph.nodes.value.find(n => n.kind === "var" && n.varKind === "green" && n.hrid === "/items/milking_essence" && n.createdBy === funcA1.id)!
+  const red1 = graph.nodes.value.find(n => n.kind === "var" && n.varKind === "red" && n.hrid === "/items/milking_essence" && n.createdBy === funcZ.id)!
+  expect(graph.tryConnect(`${green1.id}:out:main`, `${red1.id}:in:main`)).toBeNull()
+  expect(graph.nodes.value.some(n => n.kind === "var" && n.varKind === "blue" && n.hrid === "/items/milking_essence")).toBe(true)
+
+  // 再连第二对（采摘精华）：已存在共享祖先 A1 与后代 Z 的蓝节点 → 应为彩虹节点（即使数量恰好能配平）
+  const green2 = graph.nodes.value.find(n => n.kind === "var" && n.varKind === "green" && n.hrid === "/items/foraging_essence" && n.createdBy === funcA1.id)!
+  const red2 = graph.nodes.value.find(n => n.kind === "var" && n.varKind === "red" && n.hrid === "/items/foraging_essence" && n.createdBy === funcZ.id)!
+  expect(graph.tryConnect(`${green2.id}:out:main`, `${red2.id}:in:main`)).toBeNull()
+  const rainbow = graph.nodes.value.find(n => n.kind === "var" && n.varKind === "rainbow" && n.hrid === "/items/foraging_essence")
+  expect(rainbow).toBeTruthy()
+  console.log("[彩虹判定] 挤奶精华=蓝节点，采摘精华=彩虹节点（共享祖先转化+后代制造）")
+}, 600000)

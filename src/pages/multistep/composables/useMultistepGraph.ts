@@ -589,23 +589,47 @@ export function useMultistepGraph() {
     return result
   }
 
-  /** 判断绿+红合并是否应创建彩虹节点：绿的生产者有另一个同名输出已流入红的下游链（双路径供料，硬合并会导致配平冲突） */
+  /** 沿 var 入线收集上游函数节点集合（祖先紫节点，亲缘代数不限） */
+  function ancestorFuncsOf(varId: string, maxDepth: number = 20): Set<string> {
+    const result = new Set<string>()
+    const visitedVars = new Set<string>([varId])
+    const queue = [varId]
+    let depth = 0
+    while (queue.length && depth < maxDepth) {
+      depth++
+      const cur = queue.shift()!
+      const inWire = wires.value.find(w => w.toPinId === `${cur}:in:main`)
+      const producer = inWire ? nodeById(inWire.fromPinId.split(":")[0]) : undefined
+      if (producer?.kind === "func") {
+        result.add(producer.id)
+        for (const iw of wires.value.filter(x => x.toPinId.startsWith(`${producer.id}:`))) {
+          const src = nodeById(iw.fromPinId.split(":")[0])
+          if (src?.kind === "var" && !visitedVars.has(src.id)) {
+            visitedVars.add(src.id)
+            queue.push(src.id)
+          }
+        }
+      }
+    }
+    return result
+  }
+
+  /**
+   * 判断绿+红合并是否应创建彩虹节点：
+   * 已存在蓝色/彩虹节点 C3，且 C3 与候选（绿+红）有「共同祖先紫节点」与「共同后代紫节点」（亲缘代数可以不同），
+   * 则阻止合并为蓝，改为创建彩虹节点（即使数量恰好能配平）。
+   */
   function shouldBeRainbow(greenNode: GraphNode, redNode: GraphNode): boolean {
-    const producerWire = wires.value.find(w => w.toPinId === `${greenNode.id}:in:main`)
-    const producer = producerWire ? nodeById(producerWire.fromPinId.split(":")[0]) : undefined
-    if (!producer || producer.kind !== "func") return false
-    // 同生产者（直接或间接）的其他同名同等级输出
-    const siblings = nodes.value.filter(n =>
-      n.kind === "var" && n.id !== greenNode.id && n.hrid === greenNode.hrid
-      && (n.level ?? 0) === (greenNode.level ?? 0)
-      && wires.value.some(w => w.toPinId === `${n.id}:in:main` && w.fromPinId.startsWith(`${producer.id}:`)))
-    if (!siblings.length) return false
-    const redDown = downstreamFuncsOf(redNode.id)
-    if (!redDown.size) return false
-    return siblings.some((sib) => {
-      const sibDown = downstreamFuncsOf(sib.id)
-      return [...sibDown].some(f => redDown.has(f))
-    })
+    const anc = ancestorFuncsOf(greenNode.id)
+    const desc = downstreamFuncsOf(redNode.id)
+    if (!anc.size || !desc.size) return false
+    for (const other of nodes.value.filter(n =>
+      n.kind === "var" && (n.varKind === "blue" || n.varKind === "rainbow") && n.id !== greenNode.id)) {
+      const oAnc = ancestorFuncsOf(other.id)
+      const oDesc = downstreamFuncsOf(other.id)
+      if ([...oAnc].some(f => anc.has(f)) && [...oDesc].some(f => desc.has(f))) return true
+    }
+    return false
   }
 
   /** 红绿合并为彩虹节点：结构同蓝节点（in 接生产、out 接消耗），配平时为被动节点，结算拆成蓝/绿/红三部分 */
