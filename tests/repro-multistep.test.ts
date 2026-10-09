@@ -378,3 +378,78 @@ it("强化分解：+14 棉花手套分解产出强化精华 19825×成功率（t
   expect(calc.productList[0].count).toBeCloseTo(19825, 0)
   expect(q).toBeCloseTo(expected, 1)
 }, 600000)
+
+it("彩虹节点：产量有剩余时 蓝0/绿=剩余/红0，并计入收入（task08-2）", async () => {
+  const { balanceAndMutate } = await boot()
+  // X1=1×棉花靴 → A1 分解 → 彩虹(棉花布料) → F 转化(未驱动)
+  const rows = [
+    { uid: 1, hrid: "/items/cotton_boots", count: 1 },
+    { uid: 2, hrid: "/items/catalyst_of_transmutation", count: 0 }
+  ]
+  const nodes = [
+    { id: "red-1", kind: "var", varKind: "red", hrid: "/items/cotton_boots", level: 0, rowUid: 1, obtain: "buy", x: 0, y: 0 },
+    { id: "red-2", kind: "var", varKind: "red", hrid: "/items/catalyst_of_transmutation", level: 0, rowUid: 2, obtain: "buy", x: 0, y: 0 },
+    { id: "func-A1", kind: "func", funcClass: "B", hrid: "", mainItemHrid: "/items/cotton_boots", actionHrid: "/actions/alchemy/decompose", catalystRank: 0, x: 0, y: 0 },
+    { id: "rainbow-1", kind: "var", varKind: "rainbow", hrid: "/items/cotton_fabric", level: 0, count: 0, sellMode: "sell", x: 0, y: 0 },
+    { id: "func-F", kind: "func", funcClass: "B", hrid: "", mainItemHrid: "/items/cotton_fabric", actionHrid: "/actions/alchemy/transmute", catalystRank: 1, x: 0, y: 0 }
+  ] as any[]
+  const wires = [
+    { id: "w1", fromPinId: "red-1:out:main", toPinId: "func-A1:in:main" },
+    { id: "w2", fromPinId: "func-A1:out:main", toPinId: "rainbow-1:in:main" },
+    { id: "w3", fromPinId: "rainbow-1:out:main", toPinId: "func-F:in:main" },
+    { id: "w4", fromPinId: "red-2:out:main", toPinId: "func-F:in:1" }
+  ] as any[]
+  const r = balanceAndMutate(nodes, wires, rows)
+  const rb = nodes.find((n: any) => n.id === "rainbow-1")
+  const { DecomposeCalculator } = await import("@/calculator/alchemy")
+  const calc = new DecomposeCalculator({ hrid: "/items/cotton_boots", project: "处理方式", catalystRank: 0 })
+  const prod = calc.productList[0].count * calc.successRate
+  console.log(`[彩虹-剩余] 蓝=${rb.count} 绿=${rb.greenPart} 红=${rb.redPart}（产量 ${prod.toFixed(4)}，消耗 0）`)
+  expect(rb.count).toBeCloseTo(0, 3)
+  expect(rb.greenPart).toBeCloseTo(prod, 3)
+  expect(rb.redPart).toBeCloseTo(0, 3)
+  // 绿色部分计入收入（出售，扣 4% 税；价格 = 布料卖价）
+  const { getPriceOf } = await import("@/common/apis/game")
+  const fabricBid = getPriceOf("/items/cotton_fabric", 0).bid
+  expect(r.nodeInfo.get("rainbow-1")!.afterTaxIncome).toBeCloseTo(prod * fabricBid * 0.96, 0)
+}, 600000)
+
+it("彩虹节点：产量不足时 蓝0/绿0/红=缺额，并计入购买成本（task08-2）", async () => {
+  const { balanceAndMutate } = await boot()
+  // X1=2×转化催化剂 → F 被催化剂 pin 驱动；A1（彩虹的生产者）未驱动 → 产量 0，缺额=消耗
+  const rows = [
+    { uid: 1, hrid: "/items/catalyst_of_transmutation", count: 2 },
+    { uid: 2, hrid: "/items/cotton_boots", count: 0 }
+  ]
+  const nodes = [
+    { id: "red-1", kind: "var", varKind: "red", hrid: "/items/catalyst_of_transmutation", level: 0, rowUid: 1, obtain: "buy", x: 0, y: 0 },
+    { id: "red-2", kind: "var", varKind: "red", hrid: "/items/cotton_boots", level: 0, rowUid: 2, obtain: "buy", x: 0, y: 0 },
+    { id: "func-A1", kind: "func", funcClass: "B", hrid: "", mainItemHrid: "/items/cotton_boots", actionHrid: "/actions/alchemy/decompose", catalystRank: 0, x: 0, y: 0 },
+    { id: "rainbow-1", kind: "var", varKind: "rainbow", hrid: "/items/cotton_fabric", level: 0, count: 0, sellMode: "sell", x: 0, y: 0 },
+    { id: "func-F", kind: "func", funcClass: "B", hrid: "", mainItemHrid: "/items/cotton_fabric", actionHrid: "/actions/alchemy/transmute", catalystRank: 1, x: 0, y: 0 }
+  ] as any[]
+  const wires = [
+    { id: "w1", fromPinId: "red-2:out:main", toPinId: "func-A1:in:main" },
+    { id: "w2", fromPinId: "func-A1:out:main", toPinId: "rainbow-1:in:main" },
+    { id: "w3", fromPinId: "rainbow-1:out:main", toPinId: "func-F:in:main" },
+    { id: "w4", fromPinId: "red-1:out:main", toPinId: "func-F:in:1" }
+  ] as any[]
+  const r = balanceAndMutate(nodes, wires, rows)
+  const rb = nodes.find((n: any) => n.id === "rainbow-1")
+  const { TransmuteCalculator } = await import("@/calculator/alchemy")
+  const calc = new TransmuteCalculator({ hrid: "/items/cotton_fabric", project: "处理方式", catalystRank: 1 })
+  // 催化剂消耗 = 计算器条目数量/次；2 个催化剂驱动的批次数 × 每批 1 布料
+  // 消耗 = 批次数 × 每批布料数量（转化批量系数 bulk）
+  const catalystEntry = calc.ingredientList.find(i => i.hrid === "/items/catalyst_of_transmutation")
+  const bulk = calc.ingredientList.find(i => i.hrid === "/items/cotton_fabric")?.count ?? 1
+  const catalystCount = catalystEntry?.count ?? calc.successRate
+  const cons = (2 / catalystCount) * bulk
+  console.log(`[彩虹-缺额] 蓝=${rb.count} 绿=${rb.greenPart} 红=${rb.redPart}（产量 0，消耗 ${cons.toFixed(4)}）`)
+  expect(rb.count).toBeCloseTo(0, 3)
+  expect(rb.greenPart).toBeCloseTo(0, 3)
+  expect(rb.redPart).toBeCloseTo(cons, 3)
+  // 红色部分按布料买入价计成本
+  const { getPriceOf: gpo } = await import("@/common/apis/game")
+  const fabricAsk = gpo("/items/cotton_fabric", 0).ask
+  expect(r.nodeInfo.get("rainbow-1")!.extraCost).toBeCloseTo(cons * fabricAsk, 0)
+}, 600000)

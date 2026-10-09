@@ -157,6 +157,10 @@ interface PassResult {
   nodeQ: Map<string, number>
   funcActions: Map<string, { actions: number, recipe: NodeRecipe }>
   gatherTime: number
+  /** 彩虹节点：生产侧流量（蓝/绿部分来源） */
+  rainbowProduced: Map<string, number>
+  /** 彩虹节点：消耗侧流量（蓝/红部分来源） */
+  rainbowConsumed: Map<string, number>
 }
 
 /**
@@ -230,6 +234,8 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
     const visited = new Set<string>()
     const queue: GraphNode[] = [driverNode]
     let gatherTime = 0
+    const rainbowProduced = new Map<string, number>()
+    const rainbowConsumed = new Map<string, number>()
 
     /** 处理一个函数节点：按配方向其他输入/输出传播数量（同名条目按 pin 顺序各归其位） */
     function processFunc(func: GraphNode, recipe: NodeRecipe, actions: number) {
@@ -244,6 +250,11 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         const entry = idx >= 0 ? recipe.inputs[idx] : undefined
         if (!entry) continue
         const qIn = actions * entry.count
+        // 彩虹节点：只记录消耗侧流量，不参与数量传播（被动节点）
+        if (src.varKind === "rainbow") {
+          rainbowConsumed.set(src.id, (rainbowConsumed.get(src.id) ?? 0) + qIn)
+          continue
+        }
         nodeQ.set(src.id, qIn)
         queue.push(src)
       }
@@ -255,6 +266,11 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         const entry = idx >= 0 ? recipe.outputs[idx] : undefined
         if (!entry) continue
         const qOut = actions * entry.count * entry.rate * recipe.successRate
+        // 彩虹节点：只记录生产侧流量，不参与数量传播（被动节点）
+        if (tgt.varKind === "rainbow") {
+          rainbowProduced.set(tgt.id, qOut)
+          continue
+        }
         nodeQ.set(tgt.id, qOut)
         queue.push(tgt)
       }
@@ -277,7 +293,8 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         }
       }
 
-      // 1) 上游：该变量的生产函数节点（in-wire 来源）——按产量反推批次数（按 pin 索引取对应输出条目）
+      // 1) 上游：该变量的生产函数节点（in-wire 来源）——按产量反推批次数（按 pin 索引取对应输出条目）；彩虹节点为被动节点跳过
+      if (v.varKind === "rainbow") continue
       const producerWire = wires.find(w => w.toPinId === `${v.id}:in:main`)
       if (producerWire) {
         const func = nodeMap.get(producerWire.fromPinId.split(":")[0])
@@ -307,7 +324,7 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         }
       }
     }
-    return { nodeQ, funcActions, gatherTime }
+    return { nodeQ, funcActions, gatherTime, rainbowProduced, rainbowConsumed }
   }
 
   // 单轮传播直接结算
@@ -315,6 +332,8 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
   const nodeQ = pass.nodeQ
   const funcActions = pass.funcActions
   const gatherTime = pass.gatherTime
+  const rainbowProduced = pass.rainbowProduced
+  const rainbowConsumed = pass.rainbowConsumed
 
   // —— 结算：按结果汇总成本/耗时/收入并回写节点数量 ——
   let totalTime = gatherTime
@@ -377,6 +396,43 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       taxTotal += pre - after
       nodeInfo.set(v.id, { actions: null, timeCost: null, extraCost: null, preTaxIncome: pre, tax: pre - after, afterTaxIncome: after })
     }
+  }
+
+  // 彩虹节点结算：蓝 = min(产量, 消耗)；绿 = 剩余产量（按出售/保留计收入）；红 = 缺额（按购买计成本）
+  for (const v of nodes) {
+    if (v.kind !== "var" || v.varKind !== "rainbow") continue
+    const prod = rainbowProduced.get(v.id) ?? 0
+    const cons = rainbowConsumed.get(v.id) ?? 0
+    const blue = Math.min(prod, cons)
+    const level = v.level ?? 0
+    v.count = Math.round(blue * 1000) / 1000
+    v.greenPart = Math.round(Math.max(0, prod - cons) * 1000) / 1000
+    v.redPart = Math.round(Math.max(0, cons - prod) * 1000) / 1000
+    let pre = 0
+    let after = 0
+    let redCost = 0
+    if (v.greenPart > 0) {
+      let price = usedPrice(v.hrid, level, "bid")
+      const manualBid = manualPriceOf(v.hrid, level, "bid")
+      if (manualBid != null && manualBid >= 0) price = manualBid
+      pre = price < 0 ? 0 : v.greenPart * price
+      after = (v.hrid === COIN_HRID || v.sellMode === "keep") ? pre : pre * SELL_TAX_FACTOR
+      income += after
+      taxTotal += pre - after
+    }
+    if (v.redPart > 0) {
+      const buy = usedPrice(v.hrid, level, "ask")
+      redCost = v.redPart * (buy < 0 ? 0 : buy)
+      totalCost += redCost
+    }
+    nodeInfo.set(v.id, {
+      actions: null,
+      timeCost: null,
+      extraCost: redCost,
+      preTaxIncome: pre,
+      tax: pre - after,
+      afterTaxIncome: after
+    })
   }
 
   for (const [funcId, fa] of funcActions) {

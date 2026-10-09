@@ -311,8 +311,9 @@ export function useMultistepGraph() {
         nodes.value = nodes.value.filter(n => n.id !== g.id)
       }
     }
-    // 4. 变量节点颜色由 pin 占用状态决定：双连=蓝，仅输入=绿，其余=红（来源购买，含双空）
+    // 4. 变量节点颜色由 pin 占用状态决定：双连=蓝，仅输入=绿，其余=红（来源购买，含双空）；彩虹节点保持类型
     for (const v of nodes.value.filter(n => n.kind === "var")) {
+      if (v.varKind === "rainbow") continue
       const hasIn = wires.value.some(w => w.toPinId === `${v.id}:in:main`)
       const hasOut = wires.value.some(w => w.fromPinId === `${v.id}:out:main`)
       if (hasIn && hasOut) {
@@ -378,6 +379,11 @@ export function useMultistepGraph() {
       // 环检测：合并会成环时禁止（不保留三角回流/循环计算规则）
       if (mergeCreatesCycle(outNode, inNode)) {
         return getTrans("会形成循环，请调整连线")
+      }
+      // 彩虹判定：同一生产者的另一个同名输出已流入红节点的下游链 → 双路径供料，创建彩虹节点（红蓝绿三部分）
+      if (shouldBeRainbow(outNode, inNode)) {
+        createRainbowNode(outNode, inNode)
+        return null
       }
       mergeVarNodes(outNode, inNode)
       return null
@@ -552,6 +558,85 @@ export function useMultistepGraph() {
   }
 
   // ===================== 合并（红+绿 → 蓝） =====================
+
+  /** 沿 var 出线收集下游函数节点集合（彩虹检测用：两条同源流是否汇入同一条下游链） */
+  function downstreamFuncsOf(varId: string, maxDepth: number = 20): Set<string> {
+    const result = new Set<string>()
+    const visitedVars = new Set<string>([varId])
+    const queue = [varId]
+    let depth = 0
+    while (queue.length && depth < maxDepth) {
+      depth++
+      const cur = queue.shift()!
+      for (const w of wires.value.filter(x => x.fromPinId.startsWith(`${cur}:`))) {
+        const tgt = nodeById(w.toPinId.split(":")[0])
+        if (!tgt) continue
+        if (tgt.kind === "func") {
+          result.add(tgt.id)
+          for (const ow of wires.value.filter(x => x.fromPinId.startsWith(`${tgt.id}:`))) {
+            const v = nodeById(ow.toPinId.split(":")[0])
+            if (v?.kind === "var" && !visitedVars.has(v.id)) {
+              visitedVars.add(v.id)
+              queue.push(v.id)
+            }
+          }
+        } else if (tgt.kind === "var" && !visitedVars.has(tgt.id)) {
+          visitedVars.add(tgt.id)
+          queue.push(tgt.id)
+        }
+      }
+    }
+    return result
+  }
+
+  /** 判断绿+红合并是否应创建彩虹节点：绿的生产者有另一个同名输出已流入红的下游链（双路径供料，硬合并会导致配平冲突） */
+  function shouldBeRainbow(greenNode: GraphNode, redNode: GraphNode): boolean {
+    const producerWire = wires.value.find(w => w.toPinId === `${greenNode.id}:in:main`)
+    const producer = producerWire ? nodeById(producerWire.fromPinId.split(":")[0]) : undefined
+    if (!producer || producer.kind !== "func") return false
+    // 同生产者（直接或间接）的其他同名同等级输出
+    const siblings = nodes.value.filter(n =>
+      n.kind === "var" && n.id !== greenNode.id && n.hrid === greenNode.hrid
+      && (n.level ?? 0) === (greenNode.level ?? 0)
+      && wires.value.some(w => w.toPinId === `${n.id}:in:main` && w.fromPinId.startsWith(`${producer.id}:`)))
+    if (!siblings.length) return false
+    const redDown = downstreamFuncsOf(redNode.id)
+    if (!redDown.size) return false
+    return siblings.some((sib) => {
+      const sibDown = downstreamFuncsOf(sib.id)
+      return [...sibDown].some(f => redDown.has(f))
+    })
+  }
+
+  /** 红绿合并为彩虹节点：结构同蓝节点（in 接生产、out 接消耗），配平时为被动节点，结算拆成蓝/绿/红三部分 */
+  function createRainbowNode(greenNode: GraphNode, redNode: GraphNode) {
+    const hrid = greenNode.hrid
+    const level = greenNode.level ?? 0
+    const greenInputWire = wires.value.find(w => w.toPinId === `${greenNode.id}:in:main`)
+    const redOutputWires = wires.value.filter(w => w.fromPinId === `${redNode.id}:out:main`)
+    const redRowUid = redNode.rowUid
+    wires.value = wires.value.filter(w =>
+      !w.fromPinId.startsWith(`${greenNode.id}:`) && !w.toPinId.startsWith(`${greenNode.id}:`)
+      && !w.fromPinId.startsWith(`${redNode.id}:`) && !w.toPinId.startsWith(`${redNode.id}:`))
+    nodes.value = nodes.value.filter(n => n.id !== greenNode.id && n.id !== redNode.id)
+    rows.value = rows.value.filter(r => r.uid !== redRowUid)
+    const rainbow: GraphNode = {
+      id: nextId("rainbow"),
+      kind: "var",
+      varKind: "rainbow",
+      hrid,
+      level,
+      count: 0,
+      sellMode: greenNode.sellMode,
+      x: (greenNode.x + redNode.x) / 2,
+      y: (greenNode.y + redNode.y) / 2
+    }
+    nodes.value.push(rainbow)
+    if (greenInputWire) wires.value.push({ id: nextId("wire"), fromPinId: greenInputWire.fromPinId, toPinId: `${rainbow.id}:in:main` })
+    for (const w of redOutputWires) wires.value.push({ id: nextId("wire"), fromPinId: `${rainbow.id}:out:main`, toPinId: w.toPinId })
+    maintainInvariants()
+    layout()
+  }
 
   /** 判断 绿+红 合并是否形成环：从绿的生产函数节点出发沿下游（含红的后继）能否回到自身 */
   function mergeCreatesCycle(greenNode: GraphNode, redNode: GraphNode): boolean {

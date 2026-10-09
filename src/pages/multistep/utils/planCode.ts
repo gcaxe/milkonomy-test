@@ -68,7 +68,7 @@ interface CompactPlan {
 /** [kind(0变量/1函数), 类别, hridIdx, level, count, rowIdx, obtain, sellMode, mainHridIdx, actionHridIdx, catalyst, enhanceLevel, protectLevel, protectionHridIdx, createdByIdx] */
 type CompactNode = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number]
 
-const VAR_KIND = { red: 0, blue: 1, green: 2 } as const
+const VAR_KIND = { red: 0, blue: 1, green: 2, rainbow: 3 } as const
 const FUNC_CLASS = { A: 0, B: 1, C: 2 } as const
 const OBTAIN = { buy: 0, gather: 1, backpack: 2, npc: 3 } as const
 const SELL_MODE = { sell: 0, keep: 1 } as const
@@ -151,7 +151,7 @@ export function _hydratePlan(compact: CompactPlan): MultistepPlan {
       y: 0
     }
     if (node.kind === "var") {
-      node.varKind = (["red", "blue", "green"] as const)[cls] ?? "red"
+      node.varKind = (["red", "blue", "green", "rainbow"] as const)[cls] ?? "red"
       node.level = level
       if (count >= 0) node.count = count
       if (rowIdx >= 0) node.rowUid = rows[rowIdx]?.uid

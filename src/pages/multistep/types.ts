@@ -1,5 +1,5 @@
-/** 变量节点种类：red=输入(市场买入/三采集/来自背包) blue=继续处理 green=叶子出售 */
-export type VarKind = "red" | "blue" | "green"
+/** 变量节点种类：red=输入(市场买入/三采集/来自背包/NPC) blue=继续处理 green=叶子出售 rainbow=彩虹节点(红蓝绿三部分) */
+export type VarKind = "red" | "blue" | "green" | "rainbow"
 /** 函数节点类别：A=三造二厨(产物定配方) B=炼金(原料定配方) C=强化 */
 export type FuncClass = "A" | "B" | "C"
 /** 红节点获取方式 */
@@ -24,8 +24,12 @@ export interface GraphNode {
   hrid: string
   /** 物品强化等级（默认 0；强化节点产物为 +x） */
   level?: number
-  /** 该节点代表的物品数量（红节点与行同步） */
+  /** 该节点代表的物品数量（红节点与行同步；彩虹节点=蓝色部分） */
   count?: number
+  /** 彩虹节点：绿色部分（剩余产量，按出售/保留处理） */
+  greenPart?: number
+  /** 彩虹节点：红色部分（缺额，按市场购买计价） */
+  redPart?: number
   /** 红节点关联的 [上部] 行 uid（红→绿后清除） */
   rowUid?: number
   /** 获取方式（仅红节点） */

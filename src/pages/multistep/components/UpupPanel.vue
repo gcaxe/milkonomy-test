@@ -106,6 +106,8 @@ const planItems = computed(() => {
   const seen = new Set<string>()
   const list: { hrid: string, level: number }[] = []
   for (const n of props.graph.nodes.value) {
+    // 只列红色、绿色、彩虹节点的物品（纯蓝色节点是内部中转，无需列出自定义价格）
+    if (n.kind !== "var" || n.varKind === "blue") continue
     const key = `${n.hrid}|${n.level ?? 0}`
     if (!n.hrid || n.hrid === COIN_HRID || seen.has(key)) continue
     seen.add(key)

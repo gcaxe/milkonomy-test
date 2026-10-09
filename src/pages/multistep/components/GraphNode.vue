@@ -32,7 +32,8 @@ const levelText = computed(() => (props.node.level ?? 0) > 0 ? `+${props.node.le
 const kindLabel = computed(() => ({
   red: t("输入"),
   blue: t("继续处理"),
-  green: t("叶子出售")
+  green: t("叶子出售"),
+  rainbow: t("彩虹节点")
 }[props.node.varKind!]))
 const isCoin = computed(() => props.node.hrid === COIN_HRID)
 function onPinPointerDown(pinId: string, ev: PointerEvent) {
@@ -71,9 +72,9 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
       <div class="count">
         × {{ Format.number(node.count ?? 1, 3) }}
       </div>
-      <!-- 红节点：小垃圾桶删除按钮 -->
+      <!-- 红节点/彩虹节点：小垃圾桶删除按钮 -->
       <el-button
-        v-if="node.varKind === 'red'"
+        v-if="node.varKind === 'red' || node.varKind === 'rainbow'"
         class="del"
         size="small"
         text
@@ -114,9 +115,9 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
       <el-option :label="t('来自背包')" value="backpack" />
     </el-select>
 
-    <!-- 绿节点：出售方式下拉（常规物品默认出售；金币只能保留于背包，保留于背包不计税） -->
+    <!-- 绿节点/彩虹节点（绿部分）：出售方式下拉（常规物品默认出售；金币只能保留于背包，保留于背包不计税） -->
     <el-select
-      v-if="node.varKind === 'green' && node.hrid"
+      v-if="(node.varKind === 'green' || node.varKind === 'rainbow') && node.hrid"
       :model-value="node.sellMode ?? (isCoin ? 'keep' : 'sell')"
       size="small"
       :disabled="isCoin"
@@ -134,6 +135,11 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
       </template>
       <template v-else-if="node.varKind === 'blue'">
         <span>{{ t('工时占比') }} <b>--</b></span>
+      </template>
+      <template v-else-if="node.varKind === 'rainbow'">
+        <span class="part blue-part">{{ t('蓝') }} × {{ Format.number(node.count ?? 0, 3) }}</span>
+        <span class="part green-part">{{ t('绿') }} × {{ Format.number(node.greenPart ?? 0, 3) }}</span>
+        <span class="part red-part">{{ t('红') }} × {{ Format.number(node.redPart ?? 0, 3) }}</span>
       </template>
     </div>
 
@@ -170,6 +176,27 @@ function onPinPointerDown(pinId: string, ev: PointerEvent) {
   &.kind-green {
     border-color: #67c23a;
     background: rgba(103, 194, 58, 0.08);
+  }
+  &.kind-rainbow {
+    border-color: #67c23a;
+    background: linear-gradient(
+      90deg,
+      rgba(245, 108, 108, 0.08) 0%,
+      rgba(64, 158, 255, 0.08) 50%,
+      rgba(103, 194, 58, 0.08) 100%
+    );
+    box-shadow:
+      inset 3px 0 0 #f56c6c,
+      inset -3px 0 0 #67c23a;
+  }
+  .metrics .part.blue-part {
+    color: #409eff;
+  }
+  .metrics .part.green-part {
+    color: #67c23a;
+  }
+  .metrics .part.red-part {
+    color: #f56c6c;
   }
   .head {
     display: flex;
