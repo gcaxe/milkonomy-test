@@ -112,7 +112,7 @@ it("端到端配平：三造得到+0 → 强化+10 → 出售（含自定义价�
   const { balanceAndMutate, priceStore } = await boot()
   const gear = "/items/chaotic_flail_refined"
   // 市场快照中 +0 无挂单：用自定义价格（item 5，与首页同一价格库）给本体定价 300M
-  priceStore.activated = true
+  // 注意：不开启首页「已开启」总开关也应当生效（task08 修复：多步直接读价格库，勾选与计算始终跟随首页清单）
   priceStore.setPrice({ hrid: gear, ask: { manual: true, manualPrice: 300_000_000 } })
   priceStore.commit()
   // 价格 API 的快照经 watch 异步同步，等一个微任务

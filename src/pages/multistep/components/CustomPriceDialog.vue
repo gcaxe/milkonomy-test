@@ -3,7 +3,7 @@ import ItemIcon from "@@/components/ItemIcon/index.vue"
 import * as Format from "@@/utils/format"
 import { computed, watch } from "vue"
 import { getItemDetailOf, getPriceOf } from "@/common/apis/game"
-import { getManualPriceOf } from "@/common/apis/price"
+import { getManualPriceItemRaw } from "@/common/apis/price"
 import { PriceStatus } from "@/pinia/stores/game"
 import { usePriceStoreOutside } from "@/pinia/stores/price"
 
@@ -35,7 +35,7 @@ const rows = ref<PriceRow[]>([])
 watch(visible, (v) => {
   if (!v) return
   rows.value = props.items.map(({ hrid, level }) => {
-    const manual = getManualPriceOf(hrid, level)
+    const manual = getManualPriceItemRaw(hrid, level)
     const raw = getPriceOf(hrid, level, PriceStatus.MARKET, PriceStatus.MARKET)
     return {
       hrid,

@@ -1,8 +1,8 @@
 import type { GraphNode, GraphWire, NodeCalcResult, UpupItemRow } from "../types"
 import type { Action } from "~/game"
 import { GatherCalculator } from "@/calculator/gather"
-import { getActionDetailOf } from "@/common/apis/game"
-import { getUsedPriceOf } from "@/common/apis/price"
+import { getActionDetailOf, getPriceOf } from "@/common/apis/game"
+import { getManualPriceItemRaw } from "@/common/apis/price"
 import { SELL_TAX_FACTOR } from "@/common/constants/market"
 import { getTrans } from "@/locales"
 import { COIN_HRID, PriceStatus, useGameStore } from "@/pinia/stores/game"
@@ -169,9 +169,16 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
   const funcInfo = new Map<string, { actions: number, timeCostPerBatch: number, hiddenCost: number }>()
   // buffs 由 player API 的 watcher（gameData / playerStore.config 变化）自动重建，与首页同源
   let noListing = false
+  /** 手动价（直接读价格库，不受首页「已开启」总开关影响——与首页清单保持一致） */
+  function manualPriceOf(hrid: string, level: number, type: "ask" | "bid"): number | null {
+    const item = getManualPriceItemRaw(hrid, level)
+    return item?.[type]?.manual ? (item[type].manualPrice ?? null) : null
+  }
   /** 价格取值：手动价优先，否则市场价；-1（无挂单）时打标提醒 */
   function usedPrice(hrid: string, level: number, type: "ask" | "bid"): number {
-    const price = getUsedPriceOf(hrid, level, type) ?? -1
+    const manual = manualPriceOf(hrid, level, type)
+    if (manual != null && manual >= 0) return manual
+    const price = getPriceOf(hrid, level)[type] ?? -1
     if (price === -1) noListing = true
     return price
   }
@@ -352,11 +359,15 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       const producerWire = wires.find(w => w.toPinId === `${v.id}:in:main`)
       const producer = producerWire ? nodeMap.get(producerWire.fromPinId.split(":")[0]) : undefined
       let price = usedPrice(v.hrid, level, "bid")
-      if (producer && producer.kind === "func" && producerWire) {
+      // 手动卖价优先；其次取生产计算器条目价格（点金金币 = 卖价×5×bulk 等特例靠它）
+      const manualBid = manualPriceOf(v.hrid, level, "bid")
+      if (manualBid != null && manualBid >= 0) {
+        price = manualBid
+      } else if (producer && producer.kind === "func" && producerWire) {
         const fa = funcActions.get(producer.id)
         const idx = fa?.recipe.outputEntryIdx[pinIndexOf(producerWire.fromPinId)]
         const entry = idx != null && idx >= 0 ? fa?.recipe.calc?.productListWithPrice[idx] : undefined
-        if (entry) price = entry.price
+        if (entry && entry.price >= 0) price = entry.price
       }
       // 无挂单（价格 -1）时不计收入（仅提示），避免负数污染利润
       const pre = price < 0 ? 0 : q * price
@@ -382,11 +393,13 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         const idx = recipe.inputEntryIdx[pinIndexOf(iw.toPinId)]
         if (idx >= 0) wiredEntryIdx.add(idx)
       }
-      // 紫节点：单价取计算器 WithPrice 条目（转化/分解的金币成本是特例价，不是 1；手动价已生效）
+      // 紫节点：单价取计算器 WithPrice 条目（转化/分解的金币成本是特例价，不是 1）；手动买价优先
       for (const [i, e] of recipe.calc.ingredientListWithPrice.entries()) {
         if (wiredEntryIdx.has(i)) continue
-        if (e.price < 0) continue
-        hiddenCost += actions * e.count * e.price
+        const manualAsk = manualPriceOf(e.hrid, e.level ?? 0, "ask")
+        const price = manualAsk != null && manualAsk >= 0 ? manualAsk : e.price
+        if (price < 0) continue
+        hiddenCost += actions * e.count * price
       }
     } else {
       // 强化节点：自动供给（金币）按市场价计，材料/保护/本体均由连线供应

@@ -64,6 +64,10 @@ watch(() => usePriceStoreOutside().activated, () => {
 export function getManualPriceOf(hrid: string, level?: number) {
   return getManualPriceActivated() ? price.map.get(priceKeyOf(hrid, level)) : null
 }
+/** 直接读取手动价条目（不受「已开启」总开关影响）；多步蓝图用：勾选状态与计算始终跟随首页清单 */
+export function getManualPriceItemRaw(hrid: string, level?: number) {
+  return price.map.get(priceKeyOf(hrid, level)) ?? null
+}
 export function hasManualPriceOf(hrid: string, level?: number) {
   return price.map.has(priceKeyOf(hrid, level))
 }
