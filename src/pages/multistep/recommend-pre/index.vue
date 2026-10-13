@@ -35,7 +35,7 @@ const excludeCharms = ref(true)
 
 const computing = ref(false)
 const rows = ref<RecommendDisplayRow[]>(store.preTax ?? [])
-/** 用户自定搜索路径量（单位 k，最小 1 最大 9999，默认 100 = 10 万条） */
+/** 用户自定搜索路径量（单位 k，最小 1 最大 10000000，默认 100 = 10 万条） */
 const pathLimitK = ref(100)
 /** 单条路径包含的最大加工（紫节点）次数（最小 2 最大 15，默认 7） */
 const maxPurpleNodes = ref(7)
@@ -152,7 +152,7 @@ async function onStart() {
         </span>
         <span class="filter-item">
           {{ t('设置最大搜索量为') }}
-          <el-input-number v-model="pathLimitK" :min="1" :max="9999" :controls="false" size="small" style="width: 90px" />
+          <el-input-number v-model="pathLimitK" :min="1" :max="10000000" :controls="false" size="small" style="width: 110px" />
           k
           <el-tooltip placement="top" :content="t('搜索量越大越能找到高价值配方')">
             <span class="warn">?</span>
@@ -166,6 +166,16 @@ async function onStart() {
 
     <!-- [主体]：初始为空，点「开始计算」后按利润排列全部多步配方 -->
     <RecommendTable :rows="rows" :loading="computing" />
+
+    <!-- [底部]：使用说明 -->
+    <el-card class="mt-5">
+      <div class="filter-title">
+        {{ t('使用说明') }}
+      </div>
+      <div class="usage-text">
+        {{ t('税前推荐使用说明') }}
+      </div>
+    </el-card>
   </div>
 </template>
 
@@ -203,5 +213,11 @@ async function onStart() {
 .timer {
   color: #909399;
   font-size: 13px;
+}
+.usage-text {
+  white-space: pre-line;
+  line-height: 1.9;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
 }
 </style>
