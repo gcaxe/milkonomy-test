@@ -61,7 +61,8 @@ async function onFetch() {
         profitRate: res.profitRate,
         profitPerUnit: res.profit / finalQ,
         steps: res.steps,
-        code: r.code
+        code: r.code,
+        postCode: r.postCode
       })
     }
     out.sort((a, b) => b.profitPD - a.profitPD)

@@ -527,7 +527,7 @@ it("税后重算：从 store 取出结果再配平不报错（task12-2 诊断）
   const store = useMultistepRecommendStore(pinia)
 
   const results = searchChains({ threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true }, 5)
-  store.setPreTax({ configJson: "{}", buyStatus: "ASK" as any, sellStatus: "BID" as any, at: 0 }, results.map(r => ({ ...r, code: "x" })))
+  store.setPreTax({ configJson: "{}", buyStatus: "ASK" as any, sellStatus: "BID" as any, at: 0 }, results.map(r => ({ ...r, code: "x", postCode: "y" })))
   const row = store.preTax![0]
   // 模拟税后页的克隆方式（structuredClone vs JSON 深拷贝）
   try {
@@ -637,4 +637,33 @@ it("单条路径最大加工（紫节点）次数限制（task12-12）", async (
     expect(maxDepth).toBeLessThanOrEqual(maxPurpleNodes)
   }
   console.log(`[加工上限] maxPurpleNodes=${maxPurpleNodes} 时 ${results.length} 条结果每条根到叶路径 ≤${maxPurpleNodes} 个紫节点`)
+}, 600000)
+
+it("每条结果生成税前+税后两个配方码（task12-13）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const { encodePlanCode, decodePlanCode } = await import("@/pages/multistep/utils/planCode")
+  const { balanceAndMutate } = await import("@/pages/multistep/utils/balance")
+  const results = searchChains(
+    { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
+    5
+  )
+  expect(results.length).toBeGreaterThan(0)
+  for (const r of results.slice(0, 3)) {
+    // 与税前页生成逻辑一致：税前码=绿节点保留；税后码=绿/彩虹出售后重新配平
+    const preCode = await encodePlanCode(r.plan)
+    const preDecoded = await decodePlanCode(preCode)
+    expect(preDecoded.nodes.some(n => n.kind === "var" && n.varKind === "green" && n.sellMode === "keep")).toBe(true)
+
+    const postPlan = JSON.parse(JSON.stringify(r.plan))
+    for (const n of postPlan.nodes) {
+      if (n.kind === "var" && (n.varKind === "green" || n.varKind === "rainbow")) n.sellMode = "sell"
+    }
+    balanceAndMutate(postPlan.nodes, postPlan.wires, postPlan.rows)
+    const postCode = await encodePlanCode(postPlan)
+    const postDecoded = await decodePlanCode(postCode)
+    expect(postDecoded.nodes.some(n => n.kind === "var" && n.varKind === "green" && n.sellMode === "sell")).toBe(true)
+    expect(preCode).not.toBe(postCode)
+  }
+  console.log(`[双配方码] 每条结果税前/税后两个码均可解码，税后码绿节点=sell，两码不同`)
 }, 600000)

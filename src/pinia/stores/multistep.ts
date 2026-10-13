@@ -36,8 +36,10 @@ export interface PreTaxRecommendRow {
   plan: MultistepPlan
   /** 处理步骤与工时占比 */
   steps: BalanceStep[]
-  /** 配方码 */
+  /** 税前配方码（绿节点保留于背包） */
   code: string
+  /** 税后配方码（绿/彩虹节点计税出售后重新配平） */
+  postCode: string
 }
 
 export const useMultistepRecommendStore = defineStore("multistep-recommend", {

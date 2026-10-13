@@ -9,6 +9,7 @@ import { useGameStore } from "@/pinia/stores/game"
 import { configToJson, type PreTaxRecommendRow, useMultistepRecommendStore } from "@/pinia/stores/multistep"
 import { usePlayerStore } from "@/pinia/stores/player"
 import RecommendTable, { type RecommendDisplayRow } from "../components/RecommendTable.vue"
+import { balanceAndMutate } from "../utils/balance"
 import { encodePlanCode } from "../utils/planCode"
 import { searchChains } from "../utils/recommend"
 
@@ -70,10 +71,19 @@ async function onStart() {
     }, pathLimitK.value * 1000)
     const preTaxRows: PreTaxRecommendRow[] = []
     for (const r of results) {
-      preTaxRows.push({ ...r, code: await encodePlanCode(r.plan) })
+      // 税前配方码：绿节点保留于背包
+      const code = await encodePlanCode(r.plan)
+      // 税后配方码：绿/彩虹节点改为计税出售后重新配平，与税后页同一口径
+      const postPlan = JSON.parse(JSON.stringify(r.plan)) as typeof r.plan
+      for (const n of postPlan.nodes) {
+        if (n.kind === "var" && (n.varKind === "green" || n.varKind === "rainbow")) n.sellMode = "sell"
+      }
+      balanceAndMutate(postPlan.nodes, postPlan.wires, postPlan.rows)
+      const postCode = await encodePlanCode(postPlan)
+      preTaxRows.push({ ...r, code, postCode })
     }
     store.setPreTax(snapshot, preTaxRows)
-    rows.value = preTaxRows.map(({ plan, code, ...rest }) => ({ ...rest, code }))
+    rows.value = preTaxRows.map(({ plan, ...rest }) => ({ ...rest }))
     ElMessage.success(t("计算完成，共 {0} 条多步配方", [preTaxRows.length]))
   } catch (e) {
     console.error(e)
