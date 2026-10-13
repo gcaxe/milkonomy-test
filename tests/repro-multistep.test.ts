@@ -491,3 +491,150 @@ it("彩虹判定：已存在共享祖先/后代的蓝节点时，新的绿红合
   expect(rainbow).toBeTruthy()
   console.log("[彩虹判定] 挤奶精华=蓝节点，采摘精华=彩虹节点（共享祖先转化+后代制造）")
 }, 600000)
+
+it("税前多步配方推荐引擎：搜索+评估多步链（task11）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const start = Date.now()
+  const results = searchChains(
+    { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
+    20
+  )
+  console.log(`[推荐] 搜索到 ${results.length} 条多步配方，耗时 ${((Date.now() - start) / 1000).toFixed(1)}s`)
+  expect(results.length).toBeGreaterThan(0)
+  for (const r of results.slice(0, 5)) {
+    expect(Number.isFinite(r.profitPD)).toBe(true)
+    expect(Number.isFinite(r.profitRate)).toBe(true)
+    expect(Number.isFinite(r.profitPerUnit)).toBe(true)
+    expect(r.plan.nodes.length).toBeGreaterThan(0)
+    expect(r.steps.length).toBeGreaterThan(0)
+    console.log(`  ${r.startItem.split("/").pop()} -> ${r.finalItem.split("/").pop()} 日利润=${r.profitPD.toFixed(0)} 利润率=${(r.profitRate * 100).toFixed(1)}%`)
+  }
+  // 结果按日利润降序
+  for (let i = 1; i < results.length; i++) {
+    expect(results[i - 1].profitPD).toBeGreaterThanOrEqual(results[i].profitPD)
+  }
+}, 600000)
+
+it("税后重算：从 store 取出结果再配平不报错（task12-2 诊断）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const { balanceAndMutate } = await import("@/pages/multistep/utils/balance")
+  const { pinia } = await import("@/pinia")
+  const { setActivePinia } = await import("pinia")
+  const { useMultistepRecommendStore } = await import("@/pinia/stores/multistep")
+  setActivePinia(pinia)
+  const store = useMultistepRecommendStore(pinia)
+
+  const results = searchChains({ threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true }, 5)
+  store.setPreTax({ configJson: "{}", buyStatus: "ASK" as any, sellStatus: "BID" as any, at: 0 }, results.map(r => ({ ...r, code: "x" })))
+  const row = store.preTax![0]
+  // 模拟税后页的克隆方式（structuredClone vs JSON 深拷贝）
+  try {
+    const c1 = structuredClone(row.plan)
+    const r1 = balanceAndMutate(c1.nodes, c1.wires, c1.rows)
+    console.log("[诊断] structuredClone 可克隆且配平 driver=", r1.driver?.id)
+  } catch (e) {
+    console.log("[诊断] structuredClone 失败:", (e as Error).message)
+  }
+  const c2 = JSON.parse(JSON.stringify(row.plan))
+  const r2 = balanceAndMutate(c2.nodes, c2.wires, c2.rows)
+  console.log("[诊断] JSON 克隆配平 driver=", r2.driver?.id, "利润=", r2.hourlyProfit?.toFixed(0))
+  expect(r2.driver).toBeTruthy()
+}, 600000)
+
+it("搜索能找到贤者之石链的组成步骤，且盈利链可被命中（task12-5）", async () => {
+  await boot()
+  const { collectSingleSteps, searchChains } = await import("@/pages/multistep/utils/recommend")
+  const steps = collectSingleSteps()
+  // 用户例子「太阳石普通催化剂转化→贤者之石→贤者之石普通催化剂转化」的组成步骤都在单步库中：
+  // 测试环境市场快照下该链为负利润（用户线上 +139M 满足阈值），按任务规则属于死端垃圾会被剪枝；
+  // 用户线上数据下两步均为 I 类即可被搜索到。
+  const philTrans = steps.find(s => s.funcClass === "B" && s.mainItemHrid === "/items/philosophers_stone" && s.actionHrid.endsWith("/transmute") && s.catalystRank === 1)
+  const sunTrans = steps.find(s => s.funcClass === "B" && s.mainItemHrid === "/items/sunstone" && s.actionHrid.endsWith("/transmute") && s.catalystRank === 1)
+  expect(philTrans).toBeTruthy()
+  expect(sunTrans).toBeTruthy()
+  expect(philTrans!.products).toContain("/items/star_fragment")
+  expect(sunTrans!.products).toContain("/items/philosophers_stone")
+
+  // 用测试环境中真实盈利的链验证搜索结果完整可命中
+  const start = Date.now()
+  const results = searchChains(
+    { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
+    5000
+  )
+  console.log(`[贤者链] 搜索到 ${results.length} 条，耗时 ${((Date.now() - start) / 1000).toFixed(1)}s`)
+  // 测试环境市场快照下的真实盈利多步链（最优优先枚举的第一条链）
+  const hit = results.find(r => r.startItem === "/items/philosophers_stone" && r.finalItem === "/items/philosophers_mirror")
+  expect(hit).toBeTruthy()
+  if (hit) {
+    console.log(`[贤者链] 盈利链命中：philosophers_stone -> philosophers_mirror 日利润=${hit.profitPD.toFixed(0)} 步骤数=${hit.steps.length}`)
+    expect(hit.steps.length).toBeGreaterThanOrEqual(1)
+  }
+}, 600000)
+
+it("推荐配方图连通：每个函数节点全部 pin 都有连线，加载蓝图不被回退（task12-8）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const { getFuncOutputPins, resolveRecipeA, resolveRecipeB } = await import("@/pages/multistep/utils/recipes")
+  const results = searchChains(
+    { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
+    20
+  )
+  expect(results.length).toBeGreaterThan(0)
+  for (const r of results.slice(0, 5)) {
+    for (const n of r.plan.nodes) {
+      if (n.kind !== "func") continue
+      const func = n as any
+      // 输出 pin（含平凡产物）全部有线
+      const outs = getFuncOutputPins(func, 0)
+      outs.forEach((_o, i) => {
+        const pinId = `${n.id}:out:${i === 0 ? "main" : i}`
+        expect(r.plan.wires.some(w => w.fromPinId === pinId)).toBe(true)
+      })
+      // 输入 pin 全部有线
+      const ins = func.funcClass === "A"
+        ? resolveRecipeA(func.actionHrid).inputs
+        : resolveRecipeB(func.mainItemHrid, func.actionHrid.split("/").pop(), func.catalystRank ?? 0).inputs
+      ins.forEach((inp: { hrid: string, auto: boolean }, i: number) => {
+        if (inp.auto) return
+        const pinId = `${n.id}:in:${i === 0 ? "main" : i}`
+        expect(r.plan.wires.some(w => w.toPinId === pinId)).toBe(true)
+      })
+    }
+  }
+  console.log(`[连通性] ${results.length} 条结果的图全部 pin 有连线（含平凡产物绿节点）`)
+}, 600000)
+
+it("单条路径最大加工（紫节点）次数限制（task12-12）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const maxPurpleNodes = 2
+  const results = searchChains(
+    { threshold: 1_000_000, maxII: 5, maxPurpleNodes, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
+    30
+  )
+  expect(results.length).toBeGreaterThan(0)
+  for (const r of results.slice(0, 10)) {
+    // 计算函数节点 DAG 的最长路径（根到叶最多经过几个紫节点）
+    const funcDepth = (fId: string, seen: Set<string>): number => {
+      if (seen.has(fId)) return 0
+      seen.add(fId)
+      let max = 0
+      for (const w of r.plan.wires) {
+        if (!w.fromPinId.startsWith(`${fId}:out`)) continue
+        const midId = w.toPinId.split(":")[0]
+        for (const w2 of r.plan.wires) {
+          if (!w2.fromPinId.startsWith(`${midId}:out`)) continue
+          const targetId = w2.toPinId.split(":")[0]
+          const target = r.plan.nodes.find(n => n.id === targetId)
+          if (target?.kind === "func") max = Math.max(max, funcDepth(target.id, seen))
+        }
+      }
+      return 1 + max
+    }
+    const maxDepth = Math.max(...r.plan.nodes.filter(n => n.kind === "func").map(n => funcDepth(n.id, new Set())))
+    expect(maxDepth).toBeLessThanOrEqual(maxPurpleNodes)
+  }
+  console.log(`[加工上限] maxPurpleNodes=${maxPurpleNodes} 时 ${results.length} 条结果每条根到叶路径 ≤${maxPurpleNodes} 个紫节点`)
+}, 600000)

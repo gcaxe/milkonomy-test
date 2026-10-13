@@ -55,17 +55,38 @@ export const publicRoutes: RouteRecordRaw[] = [
     ]
   },
   {
-    path: "/",
+    path: "/multistep-tools",
     component: Layouts,
     redirect: "/multistep",
+    meta: {
+      title: t("多步工具"),
+      elIcon: "Share"
+    },
     children: [
       {
-        path: "multistep",
+        path: "/multistep",
         component: () => import("@/pages/multistep/index.vue"),
         name: "Multistep",
         meta: {
           title: t("多步利润蓝图"),
-          elIcon: "Share",
+          affix: false
+        }
+      },
+      {
+        path: "/recommend-pre",
+        component: () => import("@/pages/multistep/recommend-pre/index.vue"),
+        name: "RecommendPre",
+        meta: {
+          title: t("税前多步配方推荐"),
+          affix: false
+        }
+      },
+      {
+        path: "/recommend-post",
+        component: () => import("@/pages/multistep/recommend-post/index.vue"),
+        name: "RecommendPost",
+        meta: {
+          title: t("税后多步配方推荐"),
           affix: false
         }
       }

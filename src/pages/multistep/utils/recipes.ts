@@ -153,7 +153,10 @@ export interface FuncOutputPin {
  *  - A 类：originLevel（继承 0.7 倍强化等级，精炼装备保留原等级）
  *  - B 类分解：enhanceLevel（成功额外产出强化精华）
  */
-export function buildMultistepCalculator(n: GraphNode, mainLevel: number = 0) {
+/** 配方计算所需的节点字段视图（推荐引擎等外部场景无需完整 GraphNode） */
+export type RecipeNodeView = Pick<GraphNode, "funcClass" | "mainItemHrid" | "actionHrid" | "catalystRank" | "enhanceLevel">
+
+export function buildMultistepCalculator(n: RecipeNodeView, mainLevel: number = 0) {
   if (n.funcClass === "C") return null
   const cfg = { hrid: n.mainItemHrid!, project: getTrans("处理方式"), catalystRank: n.catalystRank ?? 0 }
   if (n.funcClass === "A") {
@@ -171,7 +174,7 @@ export function buildMultistepCalculator(n: GraphNode, mainLevel: number = 0) {
  * 直接由计算器 productList 派生：A 类继承拆分（0.8×+3 / 0.2×+2）、分解的强化精华都会
  * 以独立 pin 出现；平凡产物 = 主要产物之后的掉落条目。
  */
-export function getFuncOutputPins(node: GraphNode, mainLevel: number = 0): FuncOutputPin[] {
+export function getFuncOutputPins(node: RecipeNodeView, mainLevel: number = 0): FuncOutputPin[] {
   if (node.funcClass === "C") {
     if (!node.mainItemHrid || node.enhanceLevel == null) return []
     return [{ hrid: node.mainItemHrid, level: node.enhanceLevel, mundane: false }]

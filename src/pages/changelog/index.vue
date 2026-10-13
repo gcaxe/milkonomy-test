@@ -10,6 +10,54 @@ const { locale, t } = useI18n()
     <h2 class="changelog-header">
       {{ t("更新日志") }}<PolokikiBadge />
     </h2>
+    <!-- ================== v2.8.5 ================== -->
+    <details open>
+      <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
+        v2.8.5 — 2026-10-13
+      </summary>
+      <div style="padding-left:16px">
+        <template v-if="locale !== 'en'">
+          <p><strong>一、新功能</strong></p>
+          <ol>
+            <li>多步配方推荐：新增「税前多步配方推荐」与「税后多步配方推荐」两个页面。按首页单步配方日利润自动拼接多步配方（支持树/图拓扑、炼金与三造混拼），按利润排序；每条可展开查看处理步骤与工时占比、复制配方码；搜索量可自定（默认 10 万条），计算时显示计时器。</li>
+            <li>多步工具：多步利润蓝图、税前/税后多步配方推荐已整合进「多步工具」导航菜单。</li>
+          </ol>
+          <p><strong>二、调整</strong></p>
+          <ol>
+            <li>配方码规则修改，旧配方码可能失效（重新生成即可）。</li>
+          </ol>
+          <p><strong>三、未来更新计划（顺序不代表更新顺序）</strong></p>
+          <ol>
+            <li>用 GPU 加速计算</li>
+            <li>常规 UI 改进</li>
+            <li>手机端 UI 适配</li>
+            <li>炼金-转化重新设计</li>
+            <li>修 bug</li>
+          </ol>
+        </template>
+        <template v-else>
+          <p><strong>1. New features</strong></p>
+          <ol>
+            <li>Multi-step recipe recommendations: new "Pre-tax Recommendation" and "Post-tax Recommendation" pages. Multi-step recipes are assembled automatically from the homepage's single-step daily profits (tree/graph topology, alchemy + crafting), sorted by profit; expand any row to see the step breakdown and copy the recipe code; configurable search volume (100k by default) with a live timer.</li>
+            <li>Multi-step Tools: the blueprint and both recommendation pages are now grouped under the "Multi-step Tools" menu.</li>
+          </ol>
+          <p><strong>2. Adjustments</strong></p>
+          <ol>
+            <li>Recipe code format changed — old codes may no longer work (regenerate them).</li>
+          </ol>
+          <p><strong>3. Upcoming plans (order does not imply priority)</strong></p>
+          <ol>
+            <li>GPU-accelerated computation</li>
+            <li>General UI improvements</li>
+            <li>Mobile UI adaptation</li>
+            <li>Alchemy-Transmute redesign</li>
+            <li>Bug fixes</li>
+          </ol>
+        </template>
+      </div>
+    </details>
+
+    <hr>
     <!-- ================== v2.8.4 ================== -->
     <details open>
       <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
