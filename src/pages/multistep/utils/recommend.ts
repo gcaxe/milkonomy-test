@@ -13,7 +13,8 @@ import { type AlchemyActionKey, findProducingActionOf, getFuncOutputPins, resolv
  * 税前多步配方推荐引擎。
  * 单步 = 首页「利润排行」的全部不考虑税率的单步配方（三造二厨 + 炼金，不含强化/采集——多步蓝图只用紫节点）。
  * 按税前日利润分 I 类（≥阈值）/ II 类（<阈值，日利润 -1 表示无交易量，忽略）。
- * 多步 = 用任意数量的 I 类单步 + 至多 maxII 个 II 类单步拼接成树/图（红绿合并连通），
+ * 多步 = 用任意数量的 I 类单步 + 至多 maxII 个 II 类单步拼接成树（红绿合并连通），
+ * 搜索为双向增长（原料向下接供应商 / 根产物向上接消费者）+ 全局去重的最优优先 DFS，
  * 计算其税前利润并归一化到「1 个最终产物」。
  */
 
@@ -46,6 +47,8 @@ export interface RecommendOptions {
   excludeEquipment: boolean
   /** 任何一步都不能有护符参与 */
   excludeCharms: boolean
+  /** 排除的物品：不会作为原料进入多步路线（作为产物仍可出现） */
+  excludeItems?: string[]
 }
 
 export interface ChainSpec {
@@ -305,104 +308,190 @@ function buildPlanForChain(root: ChainSpec): { nodes: GraphNode[], wires: GraphW
   return { nodes, wires, rows, startItem, finalItem: root.step.products[0] }
 }
 
-/** 搜索多步链：每个单步作为最终产物步骤，原料可购买或由其他单步供应（任意数量 I 类 + 至多 maxII 个 II 类） */
-export function searchChains(options: RecommendOptions, maxResults: number = 5000): RecommendResult[] {
+/** 一条已构建的多步链状态（单根树：根=最终产物步骤，其余步骤都是某一步的原料供应商） */
+interface ChainState {
+  /** 链中步骤 id（无重复） */
+  ids: string[]
+  /** 树连接：父步骤的非平凡产物 hrid 供给子步骤的原料（该原料不再购买） */
+  links: { parent: string, hrid: string, child: string }[]
+  /** 最终产物步骤（唯一没有消费者的步骤） */
+  rootId: string
+  /** 已使用的 II 类单步数 */
+  iiUsed: number
+  /** 规范化键（步骤集合 + 连接集合排序），用于全局去重 */
+  key: string
+}
+
+/**
+ * 搜索多步链：双向增长 + 全局去重（最优优先 DFS）。
+ *  - 初始：每个单步各自成链（按日利润降序压栈，弹栈即最优优先）；
+ *  - 向下增长：任意步骤的未供给原料（红 pin）接「以该原料为非平凡产物」的单步；
+ *  - 向上增长：根步骤的非平凡产物（绿 pin）接「以该产物为原料」的单步，成为新根；
+ *  - 蓝/彩虹节点不参与扩展（已合并）；平凡产物不参与向上增长（保留于背包）；
+ *  - 去重：任何构建顺序都收敛到同一个规范化键，全局 visited 只评估一次；
+ *  - 选 DFS（栈）而非 BFS：内存 O(深度)，边搜边出结果，配合最优优先截断；
+ *  - 上限：「最大搜索量」= 已评估的不同链数量（visited 规模），结果数同受其约束；
+ *  - 可选 onProgress：每评估约 200 条链回调一次已搜索量，并让出事件循环（界面计时器/进度实时刷新、不无响应）。
+ */
+export async function searchChains(
+  options: RecommendOptions,
+  maxResults: number = 5000,
+  onProgress?: (searched: number) => void
+): Promise<RecommendResult[]> {
   const steps = collectSingleSteps().filter((s) => {
     if (options.excludeEquipment && (isEquipmentOf(s.mainItemHrid) || s.ingredients.some(i => isEquipmentOf(i)))) return false
     if (options.excludeCharms && (isCharmOf(s.mainItemHrid) || s.ingredients.some(i => isCharmOf(i)))) return false
+    // 排除物品：不作为原料进入多步路线（作为产物仍可出现）
+    if (options.excludeItems?.length && s.ingredients.some(i => options.excludeItems!.includes(i))) return false
     s.isClassI = s.dailyProfit >= options.threshold
     return true
   })
   const byProduct = new Map<string, SingleStep[]>()
+  const byIngredient = new Map<string, SingleStep[]>()
+  const stepById = new Map(steps.map(s => [s.id, s]))
   for (const s of steps) {
     for (const p of s.products) {
       if (!byProduct.has(p)) byProduct.set(p, [])
       byProduct.get(p)!.push(s)
     }
+    for (const i of s.ingredients) {
+      if (!byIngredient.has(i)) byIngredient.set(i, [])
+      byIngredient.get(i)!.push(s)
+    }
   }
 
-  const results: RecommendResult[] = []
-  const MAX_BRANCH = 300 // 单层供应商组合上限（防组合爆炸）
+  /** 规范化键：同一链无论以什么顺序构建都得到同一个键 */
+  function stateKey(ids: string[], links: ChainState["links"]): string {
+    return `${[...ids].sort().join(",")}|${links.map(l => `${l.parent}>${l.child}:${l.hrid}`).sort().join(",")}`
+  }
 
-  /** 链条是否无法继续扩展：II 类次数用尽，且没有任何（未使用的）I 类单步能与叶子原料蓝绿合并 */
-  function chainIsDeadEnd(chain: ChainSpec): boolean {
-    const usedIds = new Set<string>()
-    const iiUsed = { n: 0 }
+  /** 根到叶的最长路径（紫节点数，≤ maxPurpleNodes）；links.parent 是供应商（上游），child 是消费者（下游） */
+  function longestPath(state: ChainState): number {
+    const parents = new Map<string, string[]>()
+    for (const l of state.links) {
+      if (!parents.has(l.child)) parents.set(l.child, [])
+      parents.get(l.child)!.push(l.parent)
+    }
+    const depth = (id: string): number => {
+      const ps = parents.get(id) ?? []
+      return 1 + (ps.length ? Math.max(...ps.map(depth)) : 0)
+    }
+    return depth(state.rootId)
+  }
+
+  /** 步骤的某原料是否已由链内供应商供给 */
+  function isSupplied(state: ChainState, childId: string, hrid: string): boolean {
+    return state.links.some(l => l.child === childId && l.hrid === hrid)
+  }
+
+  /** 转成评估用的供应商树（evaluateChain/buildPlanForChain 所需）：child 的原料 hrid 由 parent 供给 */
+  function toChainSpec(state: ChainState): ChainSpec {
+    const byChild = new Map<string, { hrid: string, parent: string }[]>()
+    for (const l of state.links) {
+      if (!byChild.has(l.child)) byChild.set(l.child, [])
+      byChild.get(l.child)!.push(l)
+    }
+    const build = (id: string): ChainSpec => {
+      const suppliers = new Map<string, ChainSpec>()
+      for (const { hrid, parent } of byChild.get(id) ?? []) suppliers.set(hrid, build(parent))
+      return { step: stepById.get(id)!, suppliers }
+    }
+    return build(state.rootId)
+  }
+
+  /** 链是否无法继续扩展：II 类次数用尽，且没有任何（未使用的）单步能与叶子原料蓝绿合并 */
+  function stateIsDeadEnd(state: ChainState): boolean {
+    const usedIds = new Set(state.ids)
     const leaves: string[] = []
-    ;(function walk(spec: ChainSpec) {
-      usedIds.add(spec.step.id)
-      if (!spec.step.isClassI) iiUsed.n++
-      for (const ing of spec.step.ingredients) {
-        const sup = spec.suppliers.get(ing)
-        if (sup) walk(sup)
-        else leaves.push(ing)
+    for (const id of state.ids) {
+      const s = stepById.get(id)!
+      for (const ing of s.ingredients) {
+        if (!isSupplied(state, id, ing)) leaves.push(ing)
       }
-    })(chain)
-    const iiLeft = options.maxII - iiUsed.n
+    }
+    const iiLeft = options.maxII - state.iiUsed
     for (const leaf of leaves) {
       const suppliers = byProduct.get(leaf) ?? []
       if (suppliers.some(s => !usedIds.has(s.id) && (s.isClassI || iiLeft > 0))) return false
     }
     return true
   }
-  // 最优优先：利润高的单步先枚举，结果截断时保留的是最有希望的组合（避免按物品顺序枚举导致后部高利润根被截掉）
-  const sortedSteps = [...steps].sort((a, b) => b.dailyProfit - a.dailyProfit)
 
-  /** 返回某步骤的所有供应商组合（每个组合的 II 消耗 ≤ iiLeft） */
-  function expand(step: SingleStep, iiLeft: number, visited: Set<string>, funcDepth: number): ChainSpec[] {
-    // 单条路径（根到叶）最多包含 maxPurpleNodes 个紫（加工）节点；funcDepth 已计入本步
-    if (funcDepth >= options.maxPurpleNodes) return [newSpec(step)]
-    const opts = step.ingredients.map((ing) => {
-      const suppliers = (byProduct.get(ing) ?? []).filter(s =>
-        !visited.has(s.id) && (s.isClassI || iiLeft > 0)).sort((a, b) => b.dailyProfit - a.dailyProfit)
-      return { ing, suppliers }
-    })
-    let frontier: { suppliers: Map<string, ChainSpec>, iiUsed: number }[] = [{ suppliers: new Map(), iiUsed: 0 }]
-    for (const { ing, suppliers } of opts) {
-      const next: typeof frontier = []
-      for (const f of frontier) {
-        next.push(f) // 选项：购买
-        for (const sup of suppliers) {
-          const supCost = sup.isClassI ? 0 : 1
-          if (f.iiUsed + supCost > iiLeft) continue
-          const subChains = expand(sup, iiLeft - f.iiUsed - supCost, new Set([...visited, step.id, sup.id]), funcDepth + 1)
-          for (const sub of subChains) {
-            const m = new Map(f.suppliers)
-            m.set(ing, sub)
-            next.push({ suppliers: m, iiUsed: f.iiUsed + supCost })
-            if (next.length >= MAX_BRANCH) break
-          }
-          if (next.length >= MAX_BRANCH) break
+  /** 双向扩展：全部未供给原料（红）+ 根的非平凡产物（绿）；候选按新步骤日利润降序（最优优先） */
+  function extend(state: ChainState): ChainState[] {
+    const used = new Set(state.ids)
+    const next: ChainState[] = []
+    // 向下：每个步骤的未供给原料，接「以该原料为非平凡产物」的步骤
+    for (const id of state.ids) {
+      const s = stepById.get(id)!
+      for (const ing of s.ingredients) {
+        if (isSupplied(state, id, ing)) continue
+        for (const p of byProduct.get(ing) ?? []) {
+          if (used.has(p.id)) continue
+          const iiUsed = state.iiUsed + (p.isClassI ? 0 : 1)
+          if (iiUsed > options.maxII) continue
+          const links = [...state.links, { parent: p.id, hrid: ing, child: id }]
+          const ids = [...state.ids, p.id]
+          const st: ChainState = { ids, links, rootId: state.rootId, iiUsed, key: stateKey(ids, links) }
+          if (longestPath(st) <= options.maxPurpleNodes) next.push(st)
         }
-        if (next.length >= MAX_BRANCH) break
       }
-      frontier = next.slice(0, MAX_BRANCH)
     }
-    return frontier.map(f => newSpec(step, f.suppliers))
-  }
-
-  function newSpec(step: SingleStep, suppliers?: Map<string, ChainSpec>): ChainSpec {
-    return { step, suppliers: suppliers ?? new Map() }
-  }
-
-  // 每个单步都可能成为最终产物步骤（按日利润降序）
-  for (const root of sortedSteps) {
-    if (results.length >= maxResults) break
-    const rootCost = root.isClassI ? 0 : 1
-    if (rootCost > options.maxII) continue
-    const chains = expand(root, options.maxII - rootCost, new Set([root.id]), 1)
-    for (const chain of chains) {
-      if (results.length >= maxResults) break
-      try {
-        const r = evaluateChain(chain)
-        if (!r || !Number.isFinite(r.profitPD) || !Number.isFinite(r.profitRate) || !Number.isFinite(r.profitPerUnit)) continue
-        if (r.profitRate <= options.profitRateMin / 100) continue
-        // 整体多步利润低于单步日利润阈值且无法继续扩展 → 丢弃（减少垃圾项目）
-        if (r.profitPD < options.threshold && chainIsDeadEnd(chain)) continue
-        results.push(r)
-      } catch (e) {
-        console.error("评估多步链失败", e)
+    // 向上：根的非平凡产物，接「以该产物为原料」的步骤（成为新根）
+    const root = stepById.get(state.rootId)!
+    for (const prod of root.products) {
+      for (const p of byIngredient.get(prod) ?? []) {
+        if (used.has(p.id)) continue
+        const iiUsed = state.iiUsed + (p.isClassI ? 0 : 1)
+        if (iiUsed > options.maxII) continue
+        const links = [...state.links, { parent: state.rootId, hrid: prod, child: p.id }]
+        const ids = [...state.ids, p.id]
+        const st: ChainState = { ids, links, rootId: p.id, iiUsed, key: stateKey(ids, links) }
+        if (longestPath(st) <= options.maxPurpleNodes) next.push(st)
       }
+    }
+    // 最优优先：新步骤利润高者先弹栈
+    return next.sort((a, b) =>
+      stepById.get(b.ids[b.ids.length - 1])!.dailyProfit - stepById.get(a.ids[a.ids.length - 1])!.dailyProfit)
+  }
+
+  const results: RecommendResult[] = []
+  const visited = new Set<string>()
+  const stack: ChainState[] = []
+  // 初始：每个单步各自成链（按日利润降序压栈 → 弹栈即最优优先）
+  const seeds = [...steps].sort((a, b) => b.dailyProfit - a.dailyProfit)
+  for (let i = seeds.length - 1; i >= 0; i--) {
+    const s = seeds[i]
+    const iiUsed = s.isClassI ? 0 : 1
+    if (iiUsed > options.maxII) continue
+    stack.push({ ids: [s.id], links: [], rootId: s.id, iiUsed, key: stateKey([s.id], []) })
+  }
+
+  // 最优优先 DFS + 全局去重：「最大搜索量」= visited 规模（已评估的不同链数量）
+  const yieldNow = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+  let sinceYield = 0
+  while (stack.length && results.length < maxResults && visited.size < maxResults) {
+    const state = stack.pop()!
+    if (visited.has(state.key)) continue
+    visited.add(state.key)
+    try {
+      const r = evaluateChain(toChainSpec(state))
+      if (r && Number.isFinite(r.profitPD) && Number.isFinite(r.profitRate) && Number.isFinite(r.profitPerUnit)) {
+        const rateOk = r.profitRate > options.profitRateMin / 100
+        // 整体多步利润低于单步日利润阈值且无法继续扩展 → 丢弃（减少垃圾项目）
+        const deadEnd = r.profitPD < options.threshold && stateIsDeadEnd(state)
+        if (rateOk && !deadEnd) results.push(r)
+      }
+    } catch (e) {
+      console.error("评估多步链失败", e)
+    }
+    for (const next of extend(state).reverse()) stack.push(next)
+    // 周期性让出事件循环：计时器与「已搜索」进度实时刷新，计算期间界面不无响应
+    sinceYield++
+    if (onProgress && sinceYield >= 200) {
+      sinceYield = 0
+      onProgress(visited.size)
+      await yieldNow()
     }
   }
 

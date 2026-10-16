@@ -8,6 +8,7 @@ import PriceStatusSelect from "@/pages/dashboard/components/PriceStatusSelect.vu
 import { useGameStore } from "@/pinia/stores/game"
 import { configToJson, type PreTaxRecommendRow, useMultistepRecommendStore } from "@/pinia/stores/multistep"
 import { usePlayerStore } from "@/pinia/stores/player"
+import ExcludeItemsPanel from "../components/ExcludeItemsPanel.vue"
 import RecommendTable, { type RecommendDisplayRow } from "../components/RecommendTable.vue"
 import { balanceAndMutate } from "../utils/balance"
 import { encodePlanCode } from "../utils/planCode"
@@ -39,19 +40,24 @@ const rows = ref<RecommendDisplayRow[]>(store.preTax ?? [])
 const pathLimitK = ref(100)
 /** 单条路径包含的最大加工（紫节点）次数（最小 2 最大 15，默认 7） */
 const maxPurpleNodes = ref(7)
+/** 排除的物品（不会作为原料进入多步路线）；默认排除太阳石 */
+const excludeItems = ref<string[]>(["/items/sunstone"])
 /** 计算计时器（秒） */
 const elapsed = ref(0)
+/** 已完成的搜索量（已评估的不同链数量） */
+const searched = ref(0)
 
 /** 开始计算：快照当前装配与买卖价选项（先删旧快照），搜索并评估多步配方 */
 async function onStart() {
   if (computing.value) return
   computing.value = true
   elapsed.value = 0
+  searched.value = 0
   const startAt = Date.now()
   const timer = window.setInterval(() => {
     elapsed.value = (Date.now() - startAt) / 1000
   }, 100)
-  // 让 loading 先渲染出来再跑同步搜索
+  // 让 loading 先渲染出来再跑搜索（搜索内部会周期性让出事件循环，计时器与进度实时刷新）
   await new Promise(resolve => setTimeout(resolve, 50))
   try {
     // 快照：只存买价/卖价选的哪个选项，不存具体价格；先删旧快照（直接替换，不存在两个快照）
@@ -61,14 +67,17 @@ async function onStart() {
       sellStatus: useGameStore().sellStatus,
       at: Date.now()
     }
-    const results = searchChains({
+    const results = await searchChains({
       threshold: thresholdM.value * 1_000_000,
       maxII: maxII.value,
       maxPurpleNodes: maxPurpleNodes.value,
       profitRateMin: profitRateMin.value,
       excludeEquipment: excludeEquipment.value,
-      excludeCharms: excludeCharms.value
-    }, pathLimitK.value * 1000)
+      excludeCharms: excludeCharms.value,
+      excludeItems: excludeItems.value.filter(Boolean)
+    }, pathLimitK.value * 1000, (n) => {
+      searched.value = n
+    })
     const preTaxRows: PreTaxRecommendRow[] = []
     for (const r of results) {
       // 税前配方码：绿节点保留于背包
@@ -160,12 +169,18 @@ async function onStart() {
         </span>
         <span class="timer">
           {{ computing ? t('计算中') : t('计算用时') }} {{ elapsed.toFixed(1) }}s
+          <template v-if="searched > 0">
+            · {{ t('已搜索') }} {{ searched.toLocaleString() }}
+          </template>
         </span>
       </div>
     </el-card>
 
     <!-- [主体]：初始为空，点「开始计算」后按利润排列全部多步配方 -->
     <RecommendTable :rows="rows" :loading="computing" />
+
+    <!-- [核心区域下方、调参指南上方]：排除物品（默认排除太阳石） -->
+    <ExcludeItemsPanel v-model="excludeItems" />
 
     <!-- [底部]：使用说明 -->
     <el-card class="mt-5">

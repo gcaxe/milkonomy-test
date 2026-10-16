@@ -10,6 +10,38 @@ const { locale, t } = useI18n()
     <h2 class="changelog-header">
       {{ t("更新日志") }}<PolokikiBadge />
     </h2>
+    <!-- ================== v2.8.6 ================== -->
+    <details open>
+      <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
+        v2.8.6 — 2026-10-16
+      </summary>
+      <div style="padding-left:16px">
+        <template v-if="locale !== 'en'">
+          <p><strong>一、新功能</strong></p>
+          <ol>
+            <li>多步配方推荐支持「排除物品」：被排除的物品不会作为原料进入多步路线（默认排除太阳石），支持拼音搜索、拖动排序。</li>
+          </ol>
+          <p><strong>二、调整</strong></p>
+          <ol>
+            <li>多步配方推荐搜索方式修正：改为双向增长的 DFS 搜索（带去重），搜索结果更确定、更完整，重复计算大幅减少。</li>
+            <li>多步配方推荐新增搜索进度显示：计算时实时显示已完成的搜索量，计算过程中界面不再无响应。</li>
+          </ol>
+        </template>
+        <template v-else>
+          <p><strong>1. New features</strong></p>
+          <ol>
+            <li>Multi-step recipe recommendations now support "Excluded Items": excluded items never enter a route as ingredients (Sunstone excluded by default); supports pinyin search and drag-to-reorder.</li>
+          </ol>
+          <p><strong>2. Adjustments</strong></p>
+          <ol>
+            <li>Search method reworked: bidirectional-growth DFS with deduplication — results are more deterministic and complete, with far less repeated evaluation.</li>
+            <li>New search progress display: live count of completed searches while computing, and the UI stays responsive during long searches.</li>
+          </ol>
+        </template>
+      </div>
+    </details>
+
+    <hr>
     <!-- ================== v2.8.5 ================== -->
     <details open>
       <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">

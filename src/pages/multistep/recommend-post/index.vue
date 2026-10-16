@@ -41,7 +41,11 @@ async function onFetch() {
   await new Promise(resolve => setTimeout(resolve, 50))
   try {
     const out: RecommendDisplayRow[] = []
+    let i = 0
     for (const r of preTax) {
+      // 周期性让出事件循环：大量重算时界面不无响应
+      i++
+      if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 0))
       // store 数据是响应式代理，structuredClone 无法克隆——用 JSON 深拷贝
       const plan = JSON.parse(JSON.stringify(r.plan)) as typeof r.plan
       // 绿节点全部改为计税出售（金币本身免税，口径一致）

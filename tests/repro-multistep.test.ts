@@ -496,7 +496,7 @@ it("税前多步配方推荐引擎：搜索+评估多步链（task11）", async 
   await boot()
   const { searchChains } = await import("@/pages/multistep/utils/recommend")
   const start = Date.now()
-  const results = searchChains(
+  const results = await searchChains(
     { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
     20
   )
@@ -526,7 +526,7 @@ it("税后重算：从 store 取出结果再配平不报错（task12-2 诊断）
   setActivePinia(pinia)
   const store = useMultistepRecommendStore(pinia)
 
-  const results = searchChains({ threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true }, 5)
+  const results = await searchChains({ threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true }, 5)
   store.setPreTax({ configJson: "{}", buyStatus: "ASK" as any, sellStatus: "BID" as any, at: 0 }, results.map(r => ({ ...r, code: "x", postCode: "y" })))
   const row = store.preTax![0]
   // 模拟税后页的克隆方式（structuredClone vs JSON 深拷贝）
@@ -559,7 +559,7 @@ it("搜索能找到贤者之石链的组成步骤，且盈利链可被命中（t
 
   // 用测试环境中真实盈利的链验证搜索结果完整可命中
   const start = Date.now()
-  const results = searchChains(
+  const results = await searchChains(
     { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
     5000
   )
@@ -577,7 +577,7 @@ it("推荐配方图连通：每个函数节点全部 pin 都有连线，加载�
   await boot()
   const { searchChains } = await import("@/pages/multistep/utils/recommend")
   const { getFuncOutputPins, resolveRecipeA, resolveRecipeB } = await import("@/pages/multistep/utils/recipes")
-  const results = searchChains(
+  const results = await searchChains(
     { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
     20
   )
@@ -610,7 +610,7 @@ it("单条路径最大加工（紫节点）次数限制（task12-12）", async (
   await boot()
   const { searchChains } = await import("@/pages/multistep/utils/recommend")
   const maxPurpleNodes = 2
-  const results = searchChains(
+  const results = await searchChains(
     { threshold: 1_000_000, maxII: 5, maxPurpleNodes, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
     30
   )
@@ -644,7 +644,7 @@ it("每条结果生成税前+税后两个配方码（task12-13）", async () => 
   const { searchChains } = await import("@/pages/multistep/utils/recommend")
   const { encodePlanCode, decodePlanCode } = await import("@/pages/multistep/utils/planCode")
   const { balanceAndMutate } = await import("@/pages/multistep/utils/balance")
-  const results = searchChains(
+  const results = await searchChains(
     { threshold: 1_000_000, maxII: 0, maxPurpleNodes: 7, profitRateMin: 0, excludeEquipment: true, excludeCharms: true },
     5
   )
@@ -666,4 +666,50 @@ it("每条结果生成税前+税后两个配方码（task12-13）", async () => 
     expect(preCode).not.toBe(postCode)
   }
   console.log(`[双配方码] 每条结果税前/税后两个码均可解码，税后码绿节点=sell，两码不同`)
+}, 600000)
+
+it("双向增长+去重搜索：结果确定且多步链可命中（task13）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const opts = { threshold: 1_000_000, maxII: 5, maxPurpleNodes: 3, profitRateMin: 0, excludeEquipment: true, excludeCharms: true }
+  const start = Date.now()
+  const r1 = await searchChains(opts, 300)
+  const r2 = await searchChains(opts, 300)
+  console.log(`[双向搜索] 300 搜索量耗时 ${((Date.now() - start) / 1000).toFixed(1)}s，结果 ${r1.length} 条`)
+  expect(r1.length).toBeGreaterThan(0)
+  // 同一选项两次搜索结果完全一致（最优优先 + 全局去重 → 确定性）
+  const keyOf = (r: typeof r1[0]) => `${r.startItem}>${r.finalItem}:${r.profitPD.toFixed(0)}:${r.plan.nodes.filter(n => n.kind === "func").length}`
+  expect(r1.map(keyOf)).toEqual(r2.map(keyOf))
+  // 存在 ≥2 个紫节点的多步链（向下/向上增长都有机会拼出）
+  const multi = r1.find(r => r.plan.nodes.filter(n => n.kind === "func").length >= 2)
+  expect(multi).toBeTruthy()
+  if (multi) {
+    const funcs = multi.plan.nodes.filter(n => n.kind === "func").length
+    console.log(`[双向搜索] 命中多步链 ${multi.startItem.split("/").pop()} -> ${multi.finalItem.split("/").pop()}，紫节点=${funcs}，日利润=${multi.profitPD.toFixed(0)}`)
+  }
+}, 600000)
+
+it("排除物品：被排除的物品不作为原料进入多步路线（task13-4）", async () => {
+  await boot()
+  const { searchChains } = await import("@/pages/multistep/utils/recommend")
+  const { resolveRecipeA, resolveRecipeB } = await import("@/pages/multistep/utils/recipes")
+  const excluded = "/items/sunstone"
+  const results = await searchChains(
+    { threshold: 1_000_000, maxII: 2, maxPurpleNodes: 3, profitRateMin: 0, excludeEquipment: true, excludeCharms: true, excludeItems: [excluded] },
+    200
+  )
+  expect(results.length).toBeGreaterThan(0)
+  for (const r of results) {
+    for (const n of r.plan.nodes) {
+      if (n.kind !== "func") continue
+      const func = n as any
+      const ins = func.funcClass === "A"
+        ? resolveRecipeA(func.actionHrid).inputs
+        : resolveRecipeB(func.mainItemHrid, func.actionHrid.split("/").pop(), func.catalystRank ?? 0).inputs
+      for (const inp of ins as { hrid: string }[]) {
+        expect(inp.hrid).not.toBe(excluded)
+      }
+    }
+  }
+  console.log(`[排除物品] 排除太阳石后 ${results.length} 条结果均不以太阳石为原料`)
 }, 600000)
