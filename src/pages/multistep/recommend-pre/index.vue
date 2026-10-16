@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { ElMessage } from "element-plus"
-import { ref } from "vue"
+import { ref, watch } from "vue"
 import { usePriceStatus } from "@/common/composables/usePriceStatus"
 import ActionConfig from "@/pages/dashboard/components/ActionConfig.vue"
 import GameInfo from "@/pages/dashboard/components/GameInfo.vue"
@@ -40,12 +40,30 @@ const rows = ref<RecommendDisplayRow[]>(store.preTax ?? [])
 const pathLimitK = ref(100)
 /** 单条路径包含的最大加工（紫节点）次数（最小 2 最大 15，默认 7） */
 const maxPurpleNodes = ref(7)
-/** 排除的物品（不会作为原料进入多步路线）；默认排除太阳石 */
-const excludeItems = ref<string[]>(["/items/sunstone"])
+/** 排除物品持久化：与自定义价格（price-list）同一保存层级——localStorage 全局保存，全部装配通用一套 */
+const EXCLUDE_KEY = "multistep-recommend-exclude-items"
+function loadExcludeItems(): string[] {
+  try {
+    const data = JSON.parse(localStorage.getItem(EXCLUDE_KEY) || "[]")
+    if (Array.isArray(data) && data.every(x => typeof x === "string")) return data
+  } catch {
+  }
+  // 首次使用：默认排除太阳石
+  return ["/items/sunstone"]
+}
+/** 排除的物品（不会作为原料进入多步路线）；全局记录，改动即保存 */
+const excludeItems = ref<string[]>(loadExcludeItems())
+watch(excludeItems, (v) => {
+  localStorage.setItem(EXCLUDE_KEY, JSON.stringify(v.filter(Boolean)))
+})
+/** 仅为税前日利润大于 xx M 的配方生成配方码（最小 40 最大 9999，默认 70） */
+const codeProfitM = ref(70)
 /** 计算计时器（秒） */
 const elapsed = ref(0)
 /** 已完成的搜索量（已评估的不同链数量） */
 const searched = ref(0)
+/** 是否处于「生成配方码」阶段（搜索已完成） */
+const generatingCodes = ref(false)
 
 /** 开始计算：快照当前装配与买卖价选项（先删旧快照），搜索并评估多步配方 */
 async function onStart() {
@@ -78,8 +96,17 @@ async function onStart() {
     }, pathLimitK.value * 1000, (n) => {
       searched.value = n
     })
+    // 搜索完成：进入「生成配方码」阶段（让提示先渲染出来）
+    generatingCodes.value = true
+    await new Promise(resolve => setTimeout(resolve, 0))
     const preTaxRows: PreTaxRecommendRow[] = []
+    const codeMinProfit = codeProfitM.value * 1_000_000
     for (const r of results) {
+      // 仅为税前日利润大于 codeMinProfit 的配方生成配方码，其余留空（展开时不显示码）
+      if (r.profitPD <= codeMinProfit) {
+        preTaxRows.push({ ...r, code: "", postCode: "" })
+        continue
+      }
       // 税前配方码：绿节点保留于背包
       const code = await encodePlanCode(r.plan)
       // 税后配方码：绿/彩虹节点改为计税出售后重新配平，与税后页同一口径
@@ -100,6 +127,7 @@ async function onStart() {
   } finally {
     window.clearInterval(timer)
     computing.value = false
+    generatingCodes.value = false
   }
 }
 </script>
@@ -160,6 +188,11 @@ async function onStart() {
           <el-input-number v-model="maxPurpleNodes" :min="2" :max="15" :controls="false" size="small" style="width: 80px" />
         </span>
         <span class="filter-item">
+          {{ t('仅为税前日利大于') }}
+          <el-input-number v-model="codeProfitM" :min="40" :max="9999" :controls="false" size="small" style="width: 80px" />
+          {{ t('M的配方生成配方码') }}
+        </span>
+        <span class="filter-item">
           {{ t('设置最大搜索量为') }}
           <el-input-number v-model="pathLimitK" :min="1" :max="10000000" :controls="false" size="small" style="width: 110px" />
           k
@@ -171,6 +204,9 @@ async function onStart() {
           {{ computing ? t('计算中') : t('计算用时') }} {{ elapsed.toFixed(1) }}s
           <template v-if="searched > 0">
             · {{ t('已搜索') }} {{ searched.toLocaleString() }}
+          </template>
+          <template v-if="generatingCodes">
+            · {{ t('正在生成配方码') }}
           </template>
         </span>
       </div>

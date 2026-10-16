@@ -59,15 +59,15 @@ const pagedRows = computed(() => props.rows.slice((page.value - 1) * PAGE_SIZE, 
         <template #default="{ row }">
           <div class="expand-body">
             <TimeSharePanel :steps="row.steps" />
-            <!-- 最底下是两条可复制的配方码（只可复制，不可编辑）：税前换行税后 -->
-            <div class="code-row">
+            <!-- 最底下是两条可复制的配方码（只可复制，不可编辑）：税前换行税后；未生成的（低利润）不显示 -->
+            <div v-if="row.code" class="code-row">
               <span class="code-label">{{ t('税前配方码') }}</span>
               <el-input :model-value="row.code" readonly size="small" style="flex: 1" />
               <el-button size="small" @click="copyCode(row.code)">
                 {{ t('复制') }}
               </el-button>
             </div>
-            <div class="code-row">
+            <div v-if="row.postCode" class="code-row">
               <span class="code-label">{{ t('税后配方码') }}</span>
               <el-input :model-value="row.postCode" readonly size="small" style="flex: 1" />
               <el-button size="small" @click="copyCode(row.postCode)">
