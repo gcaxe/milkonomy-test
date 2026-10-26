@@ -34,14 +34,35 @@ function onClearAll() {
   })
 }
 
-// 不蒜子统计：加载脚本后自动填充页面底部的「总访问量 / 访客数」
+// Vercount 统计（替代不蒜子）：脚本自动上报访问并填充隐藏 span，读出后叠加起始基数显示。
+// 不蒜子数据源已 502（无法迁移现有数据），按约定从 150 访客 / 300 次访问开始计数。
+const BASE_UV = 150 // 起始访客数（人）
+const BASE_PV = 300 // 起始总访问量（次）
+const liveUv = ref(0)
+const livePv = ref(0)
+
+/** 监听 Vercount 脚本填充的隐藏 span，把数值同步到显示 */
+function bindVercountValue(id: string, cb: (n: number) => void) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const read = () => {
+    const n = Number.parseInt(el.textContent ?? "", 10)
+    if (Number.isFinite(n)) cb(n)
+  }
+  read()
+  const mo = new MutationObserver(read)
+  mo.observe(el, { childList: true, characterData: true, subtree: true })
+}
+
 onMounted(() => {
-  if (document.getElementById("busuanzi-script")) return
+  if (document.getElementById("vercount-script")) return
   const s = document.createElement("script")
-  s.id = "busuanzi-script"
+  s.id = "vercount-script"
   s.async = true
-  s.src = "https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"
+  s.src = "https://events.vercount.one/js"
   document.body.appendChild(s)
+  bindVercountValue("vercount_value_site_pv", n => (livePv.value = n))
+  bindVercountValue("vercount_value_site_uv", n => (liveUv.value = n))
 })
 </script>
 
@@ -161,14 +182,17 @@ onMounted(() => {
       </div>
     </el-card>
 
-    <!-- 不蒜子统计：总访问量 / 访客数（脚本加载后自动填充数值） -->
-    <div class="busuanzi-footer">
-      <span id="busuanzi_container_site_pv" class="bsz-item">
-        {{ t('总访问量') }}<span id="busuanzi_value_site_pv" />
+    <!-- Vercount 统计：总访问量 / 访客数（隐藏 span 由脚本填充，读出后叠加起始基数显示） -->
+    <div class="vercount-footer">
+      <span class="vct-item">
+        {{ t('总访问量') }}<span class="vct-value">{{ (BASE_PV + livePv).toLocaleString() }}</span>
       </span>
-      <span id="busuanzi_container_site_uv" class="bsz-item">
-        {{ t('访客数') }}<span id="busuanzi_value_site_uv" />
+      <span class="vct-item">
+        {{ t('访客数') }}<span class="vct-value">{{ (BASE_UV + liveUv).toLocaleString() }}</span>
       </span>
+      <span class="vct-credit">（powered by Vercount）</span>
+      <span id="vercount_value_site_pv" style="display: none" />
+      <span id="vercount_value_site_uv" style="display: none" />
     </div>
   </div>
 </template>
@@ -272,7 +296,7 @@ onMounted(() => {
   border-color: #f97316;
   color: #f97316;
 }
-.busuanzi-footer {
+.vercount-footer {
   margin-top: 16px;
   text-align: center;
   color: var(--el-text-color-secondary);
@@ -281,8 +305,16 @@ onMounted(() => {
   justify-content: center;
   gap: 24px;
 }
-.busuanzi-footer .bsz-item {
+.vercount-footer .vct-item {
   white-space: nowrap;
+}
+.vercount-footer .vct-value {
+  margin-left: 4px;
+  font-weight: 600;
+}
+.vercount-footer .vct-credit {
+  font-size: 11px;
+  opacity: 0.7;
 }
 .guide-line + .guide-line {
   margin-top: 1em;

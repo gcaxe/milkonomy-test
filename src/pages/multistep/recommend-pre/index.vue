@@ -102,11 +102,9 @@ async function onStart() {
     const preTaxRows: PreTaxRecommendRow[] = []
     const codeMinProfit = codeProfitM.value * 1_000_000
     for (const r of results) {
-      // 仅为税前日利润大于 codeMinProfit 的配方生成配方码，其余留空（展开时不显示码）
-      if (r.profitPD <= codeMinProfit) {
-        preTaxRows.push({ ...r, code: "", postCode: "" })
-        continue
-      }
+      // 仅为税前日利润大于 codeMinProfit 的配方生成配方码并展示；
+      // 其余及时丢弃、无需储存（同一轮搜索已全局去重，不会重复评估到它）
+      if (r.profitPD <= codeMinProfit) continue
       // 税前配方码：绿节点保留于背包
       const code = await encodePlanCode(r.plan)
       // 税后配方码：绿/彩虹节点改为计税出售后重新配平，与税后页同一口径
