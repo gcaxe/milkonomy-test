@@ -36,6 +36,7 @@ export default {
   "首页": "Home",
   "更新日志": "Changelog",
   "打赏": "Sponsor",
+  "致谢": "Acknowledgements",
   "英灵殿": "Valhalla",
   "相关链接": "Related Links",
 

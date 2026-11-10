@@ -57,6 +57,24 @@ export interface BalanceStep {
   share: number
   /** 动作次数/h */
   actionsPerHour: number
+  /** 独立盈亏：按市场价买原料、卖产物（含税）时的单批收入；强化节点为 null */
+  standaloneRevenue: number | null
+  /** 独立盈亏：按市场价买原料（含金币/茶）时的单批成本；强化节点为 null */
+  standaloneCost: number | null
+  /** 独立盈亏：单批利润；强化节点为 null */
+  standaloneProfit: number | null
+  /** 满负荷日利润：假设这一步 24h 都在跑；强化节点为 null */
+  standaloneDailyProfit: number | null
+  /** 按时间占比折算后的日贡献：standaloneDailyProfit × share */
+  contributionDaily: number | null
+  /** 链内口径：该步收入（叶子税后收入 + 中间品按 bid 的内部转移收入） */
+  chainRevenue: number
+  /** 链内口径：该步投入（外部红节点按 ask + 中间品按 bid 的内部转移成本） */
+  chainInputCost: number
+  /** 链内口径：该步的隐藏成本（金币/茶/催化剂） */
+  chainHiddenCost: number
+  /** 链内口径：该步对整条链日利润的贡献 */
+  chainContributionDaily: number | null
 }
 
 function emptyNodeCalc(): NodeCalcResult {
@@ -341,6 +359,9 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
   let startItemCost = 0
   let income = 0
   let taxTotal = 0
+  // 链内归因：外部红节点单价、各步链内收入/投入
+  const redUnitPrice = new Map<string, number>()
+  const chainValues = new Map<string, { revenue: number, input: number }>()
 
   for (const v of nodes) {
     if (v.kind !== "var") continue
@@ -370,6 +391,7 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
         price = price * SELL_TAX_FACTOR
       }
       const cost = q * price
+      redUnitPrice.set(v.id, price)
       totalCost += cost
       if (v.id === driverNode.id) startItemCost = cost
     }
@@ -439,6 +461,45 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
     const func = nodeMap.get(funcId)
     if (!func) continue
     const { actions, recipe } = fa
+    // 链内口径：中间品按 bid 内部转移、不计税；叶子按 bid（出售扣 4% 税，保留/金币不扣）；外部红节点按 ask。
+    // 这样每一步的「收入 - 投入」是它的价值加成，内部转移在相邻步骤间抵消，合计 = 链日利润。
+    let chainRevenue = 0
+    let chainInputCost = 0
+    for (const iw of wires.filter(x => x.toPinId.startsWith(`${func.id}:`))) {
+      const src = nodeMap.get(iw.fromPinId.split(":")[0])
+      if (!src || src.kind !== "var") continue
+      const idx = recipe.inputEntryIdx[pinIndexOf(iw.toPinId)]
+      const entry = idx >= 0 ? recipe.inputs[idx] : undefined
+      if (!entry) continue
+      const qty = actions * entry.count
+      if (src.varKind === "red") {
+        if (src.obtain === "gather") continue
+        const unit = redUnitPrice.get(src.id)
+        if (unit == null || unit < 0) continue
+        chainInputCost += qty * unit
+      } else {
+        // 蓝/彩虹中间品：按 bid 内部转移，不计税
+        const price = usedPrice(src.hrid, src.level ?? entry.level ?? 0, "bid")
+        if (price < 0) continue
+        chainInputCost += qty * price
+      }
+    }
+    for (const ow of wires.filter(x => x.fromPinId.startsWith(`${func.id}:`))) {
+      const tgt = nodeMap.get(ow.toPinId.split(":")[0])
+      if (!tgt || tgt.kind !== "var" || !tgt.hrid) continue
+      const idx = recipe.outputEntryIdx[pinIndexOf(ow.fromPinId)]
+      const entry = idx >= 0 ? recipe.outputs[idx] : undefined
+      if (!entry) continue
+      const qty = actions * entry.count * (entry.rate || 1) * recipe.successRate
+      let price = usedPrice(tgt.hrid, entry.level ?? tgt.level ?? 0, "bid")
+      // 金币等特例价格由生产计算器给出（点金 = 售价×5×bulk），不能直接用 getPriceOf(coin)=1
+      const calcPrice = recipe.calc?.productListWithPrice[idx]?.price
+      if (calcPrice != null && calcPrice >= 0) price = calcPrice
+      if (price < 0) continue
+      const tax = (tgt.hrid === COIN_HRID || tgt.sellMode === "keep") ? 1 : SELL_TAX_FACTOR
+      chainRevenue += qty * price * tax
+    }
+    chainValues.set(funcId, { revenue: chainRevenue, input: chainInputCost })
     // 隐藏输入（金币/茶/自动供给）= 配方输入中没有变量连线的条目（按 pin→条目索引判定）
     let hiddenCost = 0
     if (recipe.calc) {
@@ -503,6 +564,40 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       actionLabel = `${ALCHEMY_ACTION_LABEL[func.actionHrid!.split("/").pop() as string]}${CATALYST_LABEL[func.catalystRank ?? 0]}`
     }
     const batchTime = fa.actions * fa.recipe.timeCostPerBatch
+    // 独立盈亏：假设这一步单独跑，按市场价买全部原料、卖全部产物（含税）。
+    // 用来解释「为什么某一步满负荷亏损，但整条链仍然成立」；强化节点的期望产出表较复杂，先留空。
+    let standaloneRevenue: number | null = null
+    let standaloneCost: number | null = null
+    let standaloneProfit: number | null = null
+    let standaloneDailyProfit: number | null = null
+    let contributionDaily: number | null = null
+    const calc = fa.recipe.calc
+    if (calc) {
+      const success = calc.successRate
+      standaloneRevenue = success * calc.productListWithPrice.reduce((acc, p) => {
+        const price = p.price < 0 ? 0 : p.price
+        const tax = p.hrid === COIN_HRID ? 1 : SELL_TAX_FACTOR
+        return acc + p.count * (p.rate || 1) * price * tax
+      }, 0)
+      standaloneCost = calc.ingredientListWithPrice.reduce((acc, i) => {
+        const price = i.price < 0 ? 0 : i.price
+        return acc + i.count * price
+      }, 0)
+      standaloneProfit = standaloneRevenue - standaloneCost
+      standaloneDailyProfit = batchTime > 0
+        ? standaloneProfit * (86400 * 1e9) / batchTime
+        : null
+      contributionDaily = standaloneDailyProfit == null ? null : standaloneDailyProfit * (totalTime > 0 ? batchTime / totalTime : 0)
+    }
+    // 链内口径：叶子收入 + 中间品内部转移收入 − 外部投入 − 中间品内部转移成本 − 隐藏成本
+    const chainValue = chainValues.get(funcId)
+    const chainRevenue = chainValue?.revenue ?? 0
+    const chainInputCost = chainValue?.input ?? 0
+    const chainHiddenCost = funcInfo.get(funcId)?.hiddenCost ?? 0
+    const chainContribution = chainRevenue - chainInputCost - chainHiddenCost
+    const chainContributionDaily = totalTime > 0
+      ? chainContribution * (86400 * 1e9) / totalTime
+      : null
     // 主要物品数量：输入线连着的变量数量取最大（强化节点即本体数量）
     let processCount = 0
     for (const iw of wires.filter(x => x.toPinId.startsWith(`${funcId}:`))) {
@@ -525,7 +620,16 @@ export function balanceAndMutate(nodes: GraphNode[], wires: GraphWire[], rows: U
       actions: fa.actions,
       batchTime,
       share: totalTime > 0 ? batchTime / totalTime : 0,
-      actionsPerHour: totalTime > 0 ? fa.actions * ((3600 * 1e9) / totalTime) : 0
+      actionsPerHour: totalTime > 0 ? fa.actions * ((3600 * 1e9) / totalTime) : 0,
+      standaloneRevenue,
+      standaloneCost,
+      standaloneProfit,
+      standaloneDailyProfit,
+      contributionDaily,
+      chainRevenue,
+      chainInputCost,
+      chainHiddenCost,
+      chainContributionDaily
     })
   }
   steps.sort((a, b) => b.batchTime - a.batchTime)

@@ -222,8 +222,8 @@ export const privateRoutes: RouteRecordRaw[] = [
         component: () => import("@/pages/sponsor/index.vue"),
         name: "Sponsor",
         meta: {
-          title: t("打赏"),
-          elIcon: "Coin",
+          title: t("致谢"),
+          elIcon: "Star",
           affix: true
         }
       }

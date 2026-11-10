@@ -73,6 +73,15 @@ export const publicRoutes: RouteRecordRaw[] = [
         }
       },
       {
+        path: "/multistep-checkup",
+        component: () => import("@/pages/multistep/checkup/index.vue"),
+        name: "MultistepCheckup",
+        meta: {
+          title: t("多步路线体检"),
+          affix: false
+        }
+      },
+      {
         path: "/recommend-pre",
         component: () => import("@/pages/multistep/recommend-pre/index.vue"),
         name: "RecommendPre",

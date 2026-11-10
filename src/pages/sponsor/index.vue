@@ -1,326 +1,66 @@
 <script lang="ts" setup>
-import logoAlipayOrg from "@@/assets/images/sponsor/alipay_org.jpg?url"
-import logoHyhfishWechat from "@@/assets/images/sponsor/hyhfish-wechat.jpg?url"
-import logoPolokikiWechatPay from "@@/assets/images/sponsor/polokiki-wechat-pay.jpg?url"
-import logoPolokikiWechat from "@@/assets/images/sponsor/polokiki-wechat.jpg?url"
-import logoWechatOrg from "@@/assets/images/sponsor/wechat_org.jpg?url"
-import axios from "axios"
-import { ElLoading, type FormRules } from "element-plus"
 import { useI18n } from "vue-i18n"
 
-const submitUrl = "https://script.google.com/macros/s/AKfycbxByTjiRX36ufKHQgV1aVRrIcdxjmqEZ0SAm5qkse6CZEyoZVxKW2xmvegxB3o3bGgKOg/exec"
-const listUrl = "https://opensheet.elk.sh/1s-dW5trnzg9t93VtLEAxwBTfYEiHXRRZGGaiCgKhl9k/1"
-const sponsorBadgeModules = import.meta.glob("@@/assets/images/sponsor/gifs/*.{gif,png,jpg,jpeg,webp,avif}", {
-  eager: true,
-  import: "default"
-}) as Record<string, string>
-const sponsorBadgeMap = Object.fromEntries(
-  Object.entries(sponsorBadgeModules).map(([path, url]) => {
-    const fileName = path.split("/").pop() || ""
-    const nickname = fileName.replace(/\.[^.]+$/, "")
-    return [nickname, url]
-  })
-)
-
-interface Sponsor {
-  approved?: boolean
-  nickname?: string
-  platform?: string
-  name?: string
-  amount?: number
-  date?: Date
-  [key: string]: any
-}
-
-const sponsorList = ref<Sponsor[]>([])
-const sponsorLoading = ref(false)
-const refForm = ref()
-const form = ref<Sponsor>({})
-const dialogVisible = ref(false)
-const dialogLoading = ref(false)
 const { t } = useI18n()
-let loadingService: any
-
-const rules = reactive<FormRules>({
-  nickname: [{ required: true, message: t("不能为空"), trigger: ["blur", "change"] }],
-  platform: [{ required: true, message: t("不能为空"), trigger: ["blur", "change"] }],
-  name: [{ required: true, message: t("不能为空"), trigger: ["blur", "change"] }],
-  amount: [{ required: true, message: t("不能为空"), trigger: ["blur", "change"] }]
-})
-
-const paymentCards = [
-  {
-    key: "polokiki-wechat",
-    owner: "Polokiki",
-    ownerClass: "maintainer",
-    title: "微信",
-    note: "请Polokiki喝奶茶",
-    imageUrl: logoPolokikiWechatPay
-  },
-  {
-    key: "maintainer-alipay-polokiki",
-    owner: "Polokiki",
-    ownerClass: "maintainer",
-    title: "支付宝",
-    note: "请Polokiki喝奶茶",
-    imageUrl: logoPolokikiWechat
-  },
-  {
-    key: "maintainer-wechat",
-    owner: "hyhfish",
-    ownerClass: "maintainer",
-    title: "微信",
-    note: "请hyhfish喝杯奶茶",
-    imageUrl: logoHyhfishWechat
-  },
-  {
-    key: "author-wechat",
-    owner: "luyh7",
-    ownerClass: "author",
-    title: "微信",
-    note: "luyh7",
-    imageUrl: logoWechatOrg
-  },
-  {
-    key: "author-alipay",
-    owner: "luyh7",
-    ownerClass: "author",
-    title: "支付宝",
-    note: "luyh7",
-    imageUrl: logoAlipayOrg
-  }
-]
-
-watch(dialogLoading, (val) => {
-  if (val) {
-    loadingService = ElLoading.service({
-      lock: true,
-      target: ".dialog"
-    })
-  } else {
-    loadingService?.close()
-  }
-})
-
-function submit() {
-  refForm.value.validate((valid: boolean) => {
-    if (!valid) return
-    dialogLoading.value = true
-    fetch(submitUrl, {
-      redirect: "follow",
-      method: "POST",
-      body: JSON.stringify(form.value),
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8"
-      }
-    })
-      .then(() => {
-        ElMessage.success(t("提交成功，请等待审核"))
-        dialogVisible.value = false
-        loadData()
-      })
-      .catch((e) => {
-        ElMessage.error(e)
-      })
-      .finally(() => {
-        dialogLoading.value = false
-      })
-  })
-}
-
-function loadData() {
-  sponsorLoading.value = true
-  axios.get(listUrl)
-    .then(({ data }) => {
-      const keyMap: Record<string, string> = {
-        姓名: "name",
-        审核状态: "approved",
-        昵称: "nickname",
-        平台: "platform",
-        金额: "amount",
-        时间: "date"
-      }
-      sponsorList.value = data.map((item: any) => {
-        const sponsor: Sponsor = {}
-        for (const key in item) {
-          keyMap[key] && (sponsor[keyMap[key]] = item[key])
-        }
-        return sponsor
-      }).filter((item: Sponsor) => item.approved)
-
-      const map = new Map<string, Sponsor>()
-      sponsorList.value.forEach((item: Sponsor) => {
-        if (map.has(item.nickname!)) {
-          const sponsor = map.get(item.nickname!)
-          if (sponsor) {
-            sponsor.amount! = +sponsor.amount! + +item.amount!
-          }
-        } else {
-          map.set(item.nickname!, item)
-        }
-      })
-      // 手动添加的赞助者
-      const hardcoded: Sponsor[] = [
-        { approved: true, nickname: "Laulau01", platform: "微信", amount: 28.88 },
-        { approved: true, nickname: "Blue", platform: "微信", amount: 30 }
-      ]
-      for (const h of hardcoded) {
-        const existing = map.get(h.nickname!)
-        if (existing) {
-          existing.amount = (existing.amount || 0) + (h.amount || 0)
-        } else {
-          map.set(h.nickname!, h)
-        }
-      }
-
-      sponsorList.value = Array.from(map.values()).sort((a, b) => (b.amount || 0) - (a.amount || 0))
-    })
-    .catch((e) => {
-      ElMessage.error(e)
-    })
-    .finally(() => {
-      sponsorLoading.value = false
-    })
-}
-
-function getSponsorBadge(nickname?: string) {
-  return nickname ? sponsorBadgeMap[nickname] : undefined
-}
-
-loadData()
 </script>
 
 <template>
-  <div class="sponsor-page">
+  <div class="ack-page">
     <div class="page-head">
-      <h1>
-        {{ t('打赏页面') }}
-      </h1>
+      <h1>{{ t('致谢') }}</h1>
       <p class="sub-title">
-        {{ t('如果你觉得 Milkonomy 对你有帮助，可以通过下方方式支持后续维护。') }}
-      </p>
-      <p class="meta-line">
-        {{ t('原作者：') }}<span class="author">luyh7</span>、<span class="author">hyhfish</span>
-      </p>
-      <p class="meta-line">
-        {{ t('当前维护者：') }}<span class="maintainer">Polokiki</span> / QQ：<span class="maintainer">1508828092</span>
-      </p>
-      <p class="meta-line">
-        {{ t('请 {0} 喝杯奶茶', ['Polokiki']) }}
+        感谢所有帮助过 Milkonomy 的人。
       </p>
     </div>
 
-    <el-row :gutter="20">
-      <el-col :xs="24" :md="11">
-        <el-card class="sponsor-list">
-          <template #header>
-            <div class="card-head">
-              <span>{{ t('感谢以下玩家打赏') }}</span>
-              <el-button type="primary" @click="dialogVisible = true">
-                {{ t('我要上榜') }}
-              </el-button>
-            </div>
-          </template>
-          <el-table v-loading="sponsorLoading" :data="sponsorList">
-            <el-table-column :label="t('排名')" width="70">
-              <template #default="{ $index }">
-                <div class="rank-cell">
-                  <span>{{ ["🥇", "🥈", "🥉"][$index] || $index + 1 }}</span>
-                </div>
-              </template>
-            </el-table-column>
+    <el-card class="ack-card" shadow="never">
+      <section class="ack-section">
+        <h2>项目来源</h2>
+        <p>
+          Milkonomy 由 <a href="https://github.com/luyh7" target="_blank" rel="noopener">luyh7</a> 创建，
+          hyhfish、<a href="https://github.com/polokikiki" target="_blank" rel="noopener">polokiki</a>
+          等维护者持续维护中文版本。
+        </p>
+        <p>
+          本测试版由 gcaxe 基于 polokiki/Milkonomy 二次开发，重点实现多步利润蓝图、
+          税前/税后多步配方推荐、强化节点与配方码。
+        </p>
+      </section>
 
-            <el-table-column prop="nickname" :label="t('昵称')">
-              <template #default="{ row }">
-                <div :class="{ [row.nickname]: true }" class="nickname-cell">
-                  <span>{{ row.nickname }}</span>
-                  <img
-                    v-if="getSponsorBadge(row.nickname)"
-                    class="nickname-badge"
-                    :src="getSponsorBadge(row.nickname)"
-                    :alt="`${row.nickname} badge`"
-                  >
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column prop="amount" :label="t('金额')" width="100">
-              <template #default="{ row }">
-                <span>¥{{ row.amount }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
+      <section class="ack-section">
+        <h2>主要贡献者</h2>
+        <ul>
+          <li><a href="https://github.com/luyh7" target="_blank" rel="noopener">luyh7</a>：原作者，Milkonomy 的基础架构与计算逻辑。</li>
+          <li>hyhfish：中文版维护、数据与工具链。</li>
+          <li><a href="https://github.com/polokikiki" target="_blank" rel="noopener">polokiki</a>：中文版维护、打野工具与炼金工具。</li>
+          <li>gcaxe：本测试版的多步蓝图、多步推荐与工程化。</li>
+        </ul>
+      </section>
 
-      <el-col :xs="24" :md="13">
-        <el-row :gutter="16" class="img-row">
-          <el-col v-for="card in paymentCards" :key="card.key" :xs="12" :sm="12" :xl="12">
-            <el-card class="payment-card">
-              <div class="owner-line">
-                <span :class="card.ownerClass">{{ card.owner }}</span>
-              </div>
-              <div class="placeholder-box">
-                <img v-if="card.imageUrl" class="payment-image" :src="card.imageUrl" :alt="`${card.owner}${card.title}`">
-                <div v-else class="placeholder-inner">
-                  <div class="placeholder-text">
-                    二维码待提供
-                  </div>
-                </div>
-              </div>
-              <div class="img-alt">
-                {{ card.title }}
-              </div>
-              <div class="img-note">
-                {{ card.note }}
-              </div>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-col>
-    </el-row>
+      <section class="ack-section">
+        <h2>致谢</h2>
+        <p>
+          感谢所有提供反馈、测试、配方、数据与建议的玩家。没有你们的反馈，这个工具不会迭代到今天。
+        </p>
+      </section>
 
-    <el-dialog class="dialog" v-model="dialogVisible" :title="t('我要上榜')" :show-close="false">
-      <el-form ref="refForm" :model="form" class="form" :rules="rules" label-width="80px">
-        <el-form-item prop="nickname" :label="t('昵称')">
-          <el-input v-model="form.nickname" :placeholder="t('打赏者名单上显示的名字')" />
-        </el-form-item>
-        <el-form-item prop="platform" :label="t('平台')">
-          <el-select v-model="form.platform" :placeholder="t('请选择')">
-            <el-option :label="t('支付宝')" value="支付宝" />
-            <el-option :label="t('微信')" value="微信" />
-            <el-option :label="t('Paypal')" value="Paypal" />
-          </el-select>
-        </el-form-item>
-        <el-form-item prop="name" :label="t('姓名')">
-          <el-input v-model="form.name" :placeholder="t('您支付时使用的名字')" />
-        </el-form-item>
-        <el-form-item prop="amount" :label="t('金额')">
-          <el-input v-model="form.amount" placeholder="CNY" />
-        </el-form-item>
-        <div class="form-tip">
-          {{ t('提交后请等待作者审核，审核通过后会显示在打赏者名单中') }}
-        </div>
-      </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button type="primary" @click="submit">
-            {{ t('提交') }}
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
+      <section class="ack-notice">
+        <p>本页面仅用于致谢，不提供任何收款方式。如需支持维护者，请通过其 GitHub 主页联系。</p>
+      </section>
+    </el-card>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.sponsor-page {
+.ack-page {
+  max-width: 880px;
   padding: 20px;
-  text-align: center;
+  margin: 0 auto;
 }
 
 .page-head {
   margin-bottom: 24px;
+  text-align: center;
 }
 
 .page-head h1 {
@@ -328,321 +68,64 @@ loadData()
   font-size: 34px;
 }
 
-.sub-title,
-.tip-line {
+.sub-title {
   color: #999;
   line-height: 1.8;
 }
 
-.meta-line {
-  margin: 8px 0;
-  font-size: 16px;
-}
-
-.author,
-.maintainer {
-  font-weight: 700;
-}
-
-.author {
-  background: linear-gradient(to right, #ff4757, #ff6b81, #ffa502, #20bf6b, #01a3d4, #5f27cd, #d252e1);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.maintainer {
-  background: linear-gradient(90deg, #16ab1b, #20bf6b, #2ecc71);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sponsor-list {
+.ack-card {
   text-align: left;
-  :deep(.el-table) {
-    .cell {
-      overflow: visible !important;
-    }
-  }
 }
 
-.rank-cell,
-.dialog-footer {
-  display: flex;
-  justify-content: center;
+.ack-section {
+  padding: 8px 4px 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-.nickname-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.ack-section:last-of-type {
+  border-bottom: none;
 }
 
-.nickname-badge {
-  width: 36px;
-  height: 36px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.img-row {
-  margin: 0 !important;
-}
-
-.img-row .el-col {
-  margin-bottom: 16px;
-}
-
-.payment-card {
-  height: 100%;
-}
-
-.owner-line {
-  margin-bottom: 8px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.placeholder-box {
-  width: 100%;
-  max-width: 190px;
-  aspect-ratio: 1 / 1;
-  padding: 8px;
-  margin: 0 auto;
-}
-
-.placeholder-inner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  border: 2px dashed #d9b88f;
-  border-radius: 14px;
-  background:
-    linear-gradient(45deg, #faf6ef 25%, transparent 25%), linear-gradient(-45deg, #faf6ef 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #faf6ef 75%), linear-gradient(-45deg, transparent 75%, #faf6ef 75%);
-  background-position:
-    0 0,
-    0 12px,
-    12px -12px,
-    -12px 0;
-  background-size: 24px 24px;
-}
-
-.payment-image {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 14px;
-}
-
-.placeholder-text {
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.95);
-  color: #b57a2c;
-  font-weight: 700;
-}
-
-.img-alt {
-  margin-top: 10px;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.img-note {
-  margin-top: 6px;
-  color: #999;
-  line-height: 1.6;
-  font-size: 13px;
-}
-
-.form {
-  margin: 20px;
-}
-
-.form-tip {
-  margin: 10px 80px;
-  line-height: 1.6;
-  color: #666;
-}
-
-.luyh7 {
-  width: 1000px;
-  background: linear-gradient(to right, #ff4757, #ff6b81, #ffa502, #20bf6b, #01a3d4, #5f27cd, #d252e1);
-  animation: glow-animation 2s ease-in-out infinite alternate;
-  -webkit-background-size: 1000px 100%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.Joey {
+.ack-section h2 {
+  margin: 8px 0 12px;
   font-size: 20px;
-  font-family: Roboto, Helvetica, Arial, sans-serif;
-  font-weight: 600;
-  width: 100%;
-  background: linear-gradient(160deg, #fff8c7 30%, #fbd640);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(1px 0 2px rgba(244, 64, 64, 0.6901960784)) drop-shadow(-1px 0 2px rgba(244, 64, 64, 0.6901960784))
-    drop-shadow(0 1px 2px rgba(244, 64, 64, 0.6901960784)) drop-shadow(0 -1px 2px rgba(244, 64, 64, 0.6901960784));
 }
 
-.BBC233 {
-  font-size: 20px;
-  font-weight: bold;
-  background: linear-gradient(to right, #ff00ff, #00ffff, #ff0000);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: glow-animation 2s ease-in-out infinite alternate;
+.ack-section p,
+.ack-section li {
+  color: #606266;
+  line-height: 1.9;
 }
 
-.苏叶叶 {
-  font-size: 20px;
-  font-weight: bold;
-  background-image: -webkit-linear-gradient(left, #d48085, #fff 30%, #d48085 50%);
-  -webkit-text-fill-color: transparent;
-  -webkit-background-clip: text;
-  -webkit-background-size: 200% 100%;
-  animation: masked-animation 2s infinite linear;
+.ack-section ul {
+  padding-left: 20px;
+  margin: 0;
 }
 
-.adudu {
-  font-size: 20px;
-  font-weight: bold;
-  background-image: -webkit-linear-gradient(left, #f29b1d, #fff 10%, #f29b1d 20%);
-  -webkit-text-fill-color: transparent;
-  -webkit-background-clip: text;
-  -webkit-background-size: 200% 100%;
-  animation: masked-animation 3s infinite linear;
+.ack-section a {
+  color: var(--el-color-primary);
+  text-decoration: none;
 }
 
-.raintower {
-  font-size: 24px;
-  font-weight: 600;
-  background-image: -webkit-linear-gradient(left, #ff4757, #ff6b81, #ffa502, #20bf6b, #01a3d4, #5f27cd, #d252e1);
-  -webkit-text-fill-color: transparent;
-  -webkit-background-clip: text;
-  -webkit-background-size: 50% 100%;
-  -webkit-text-stroke: 0.3px rgba(255, 215, 0, 0.8);
+.ack-section a:hover {
+  text-decoration: underline;
 }
 
-.eggyang {
-  font-size: 24px;
-  font-weight: 900;
-  position: relative;
-  padding: 15px;
-  margin-bottom: 5px;
-  padding-left: 0;
-  background: linear-gradient(
-    45deg,
-    #ffd700,
-    #ffed4a,
-    #f9ca24,
-    #f0932b,
-    #eb4d4b,
-    #6c5ce7,
-    #a29bfe,
-    #fd79a8,
-    #fdcb6e,
-    #ffd700
-  );
-  background-size: 400% 400%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  -webkit-text-stroke: 1px #ffd700;
-  animation:
-    eggyang-gradient 3s ease-in-out infinite,
-    eggyang-pulse 2s ease-in-out infinite alternate,
-    eggyang-glow 4s linear infinite;
-  filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.8)) drop-shadow(0 0 20px rgba(255, 215, 0, 0.6))
-    drop-shadow(0 0 30px rgba(255, 215, 0, 0.4));
-  overflow: visible;
-  transform-origin: center;
+.ack-notice {
+  padding: 14px 18px;
+  margin-top: 12px;
+  color: #8a6d3b;
+  background: #fdf6ec;
+  border-radius: 8px;
 }
 
-.RyuuSan {
-  background: linear-gradient(90deg, #e3858b, #e3858b 3%, #f6d6d8 15%, #f6d6d8 30%, #ecadb1 50%, #e3858b 95%, #e3858b);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-@keyframes glow-animation {
-  0% {
-    filter: hue-rotate(-360deg);
-  }
-  100% {
-    filter: hue-rotate(360deg);
-  }
-}
-
-@keyframes masked-animation {
-  0% {
-    background-position: 100% 0;
-  }
-  100% {
-    background-position: -100% 0;
-  }
-}
-
-@keyframes eggyang-gradient {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-@keyframes eggyang-pulse {
-  0% {
-    transform: scale(1);
-  }
-  100% {
-    transform: scale(1.05);
-  }
-}
-
-@keyframes eggyang-glow {
-  0% {
-    filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.8)) drop-shadow(0 0 20px rgba(255, 215, 0, 0.6))
-      drop-shadow(0 0 30px rgba(255, 215, 0, 0.4)) hue-rotate(0deg);
-  }
-  25% {
-    filter: drop-shadow(0 0 15px rgba(255, 105, 180, 0.8)) drop-shadow(0 0 25px rgba(255, 105, 180, 0.6))
-      drop-shadow(0 0 35px rgba(255, 105, 180, 0.4)) hue-rotate(90deg);
-  }
-  50% {
-    filter: drop-shadow(0 0 20px rgba(0, 191, 255, 0.8)) drop-shadow(0 0 30px rgba(0, 191, 255, 0.6))
-      drop-shadow(0 0 40px rgba(0, 191, 255, 0.4)) hue-rotate(180deg);
-  }
-  75% {
-    filter: drop-shadow(0 0 15px rgba(50, 205, 50, 0.8)) drop-shadow(0 0 25px rgba(50, 205, 50, 0.6))
-      drop-shadow(0 0 35px rgba(50, 205, 50, 0.4)) hue-rotate(270deg);
-  }
-  100% {
-    filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.8)) drop-shadow(0 0 20px rgba(255, 215, 0, 0.6))
-      drop-shadow(0 0 30px rgba(255, 215, 0, 0.4)) hue-rotate(360deg);
-  }
+.ack-notice p {
+  margin: 0;
+  line-height: 1.8;
 }
 
 @media (max-width: 768px) {
-  .sponsor-page {
+  .ack-page {
     padding: 16px;
   }
 
