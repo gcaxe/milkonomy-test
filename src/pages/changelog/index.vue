@@ -10,6 +10,44 @@ const { locale, t } = useI18n()
     <h2 class="changelog-header">
       {{ t("更新日志") }}<PolokikiBadge />
     </h2>
+    <!-- ================== v2.8.7 ================== -->
+    <details open>
+      <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
+        v2.8.7 — 2026-11-10
+      </summary>
+      <div style="padding-left:16px">
+        <template v-if="locale !== 'en'">
+          <p><strong>一、新功能</strong></p>
+          <ol>
+            <li>多步工具新增「多步路线体检」，与「多步利润蓝图」并列。</li>
+            <li>支持选择已保存配方或粘贴配方码，拆解每一步的满负荷日利润、时间占比与折算日贡献，并可在「独立口径 / 链内口径」之间切换。</li>
+            <li>展示最终叶子的日产出、近 24 小时成交量覆盖率与产能判断，帮助判断理论日利润能否被市场吸收。</li>
+            <li>新增方差分析区域（施工中），具体指标后续补齐。</li>
+          </ol>
+          <p><strong>二、说明</strong></p>
+          <ol>
+            <li>体检页只做诊断，不重新推荐配方；实际日利润以链路合计为准。</li>
+            <li>强化节点暂不拆分独立盈亏。</li>
+          </ol>
+        </template>
+        <template v-else>
+          <p><strong>1. New features</strong></p>
+          <ol>
+            <li>New "Multi-step Route Checkup" under Multi-step Tools, alongside the Multi-step Blueprint.</li>
+            <li>Load a saved plan or paste a recipe code to break down each step's full-load daily profit, time share, and time-weighted contribution; switch between standalone and in-chain views.</li>
+            <li>Show final leaf daily output, 24-hour volume coverage, and capacity warnings to check whether the theoretical daily profit can be absorbed by the market.</li>
+            <li>Added a variance analysis section (work in progress); detailed metrics will follow.</li>
+          </ol>
+          <p><strong>2. Notes</strong></p>
+          <ol>
+            <li>The checkup page is diagnostic only; it does not recommend recipes. The chain total is the authoritative daily profit.</li>
+            <li>Enhancement nodes are not split into standalone profit yet.</li>
+          </ol>
+        </template>
+      </div>
+    </details>
+
+    <hr>
     <!-- ================== v2.8.6 ================== -->
     <details open>
       <summary style="cursor:pointer;font-weight:bold;font-size:18px;margin:16px 0 8px">
