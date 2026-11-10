@@ -179,10 +179,34 @@ interface LeafRow {
   keep: boolean
   perBatch: number
   perDay: number
-  volume1h: number
   volumeDay: number | null
+  volumeSource: "history" | "current" | "none"
+  volumeHours: number
   coverage: number | null
   revenueDay: number
+}
+
+/** 优先用近 24h 成交量历史（均值 ×24）；历史不足时退回 1h×24。 */
+function volumeInfo(hrid: string, level: number): { day: number | null, source: "history" | "current" | "none", hours: number } {
+  const key = `${hrid}@${level}`
+  const entries = (gameStore.volHistory ?? [])
+    .filter(e => e && e.v && typeof e.v[key] === "number" && e.v[key] >= 0)
+    .slice(-24)
+  if (entries.length >= 3) {
+    const sum = entries.reduce((acc, e) => acc + e.v[key], 0)
+    return { day: (sum / entries.length) * 24, source: "history", hours: entries.length }
+  }
+  const current = getPriceOf(hrid, level).vol
+  if (typeof current === "number" && current >= 0) {
+    return { day: current * 24, source: "current", hours: 1 }
+  }
+  return { day: null, source: "none", hours: 0 }
+}
+
+function volumeSourceText(row: LeafRow) {
+  if (row.volumeSource === "history") return t("近{0}h均值", [String(row.volumeHours)])
+  if (row.volumeSource === "current") return t("1h×24")
+  return "—"
 }
 
 const leafRows = computed<LeafRow[]>(() => {
@@ -198,8 +222,7 @@ const leafRows = computed<LeafRow[]>(() => {
     const level = n.level ?? 0
     const price = getPriceOf(n.hrid, level)
     const perDay = perBatch * batches
-    const volume1h = price.vol ?? -1
-    const volumeDay = volume1h > 0 ? volume1h * 24 : null
+    const volume = volumeInfo(n.hrid, level)
     const keep = n.sellMode === "keep"
     const revenueDay = !keep && price.bid > 0
       ? perDay * price.bid * (n.hrid === COIN_HRID ? 1 : SELL_TAX_FACTOR)
@@ -211,9 +234,10 @@ const leafRows = computed<LeafRow[]>(() => {
       keep,
       perBatch,
       perDay,
-      volume1h,
-      volumeDay,
-      coverage: keep || !volumeDay ? null : perDay / volumeDay,
+      volumeDay: volume.day,
+      volumeSource: volume.source,
+      volumeHours: volume.hours,
+      coverage: keep || volume.day == null ? null : perDay / volume.day,
       revenueDay
     })
   }
@@ -547,7 +571,7 @@ function leafTagText(row: LeafRow) {
         <template #header>
           <div class="card-head">
             <span>{{ t('最终叶子与产能') }}</span>
-            <span class="hint">{{ t('按项目内 1 小时成交量估算；覆盖率高说明理论日利润会被成交量卡住') }}</span>
+            <span class="hint">{{ t('优先用近 24h 成交量历史求日均×24；历史不足时退回 1h×24；覆盖率高说明理论日利润会被成交量卡住') }}</span>
           </div>
         </template>
         <el-table :data="leafRows" size="small" style="width: 100%">
@@ -572,12 +596,12 @@ function leafTagText(row: LeafRow) {
               {{ number(row.perDay, 1) }}
             </template>
           </el-table-column>
-          <el-table-column :label="t('1h 成交量')" align="right" min-width="110">
+          <el-table-column :label="t('数据口径')" align="center" min-width="110">
             <template #default="{ row }">
-              {{ row.volume1h >= 0 ? number(row.volume1h, 0) : '—' }}
+              {{ volumeSourceText(row) }}
             </template>
           </el-table-column>
-          <el-table-column :label="t('日成交量（估算）')" align="right" min-width="130">
+          <el-table-column :label="t('日成交量（近24h优先）')" align="right" min-width="150">
             <template #default="{ row }">
               {{ row.volumeDay == null ? '—' : number(row.volumeDay, 0) }}
             </template>

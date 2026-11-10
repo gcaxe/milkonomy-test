@@ -18,6 +18,12 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      # 项目 .npmrc 默认使用 npmmirror（国内本地安装快），但 GitHub Actions
+      # 访问 npmmirror 经常 502/503/504。CI 里用官方源覆盖，避免部署因网络失败。
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_FETCH_RETRIES: "5"
+      NPM_CONFIG_FETCH_TIMEOUT: "120000"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
